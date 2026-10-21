@@ -17,9 +17,11 @@ standardising filenames, and organising folder structure.
 - Organises files into `Artist/Album` or `Artist/Year - Album` hierarchy
 - Optional title-casing and underscore replacement
 
-### Duplicate Detection
+### Duplicate Detection & Removal
 - Three methods: file hash, hash + duration, or duration + file size
-- Groups duplicates visually for manual review
+- **Review Duplicates** toolbar action (also in the sidebar) groups matches
+- Pick one keeper per group; extras are moved to **Trash** (recoverable)
+- Suggested keeper prefers lossless formats, richer tags, and larger files
 
 ### Safety
 - **Backup before modify** — originals are copied to a `_MusicSanitizer_Backup/` folder
@@ -82,6 +84,7 @@ MusicSanitizer/
     ├── FileListView.swift      # File table with checkboxes and issue badges
     ├── FileDetailView.swift    # Tag grid, issue list, proposed path diff
     ├── DiffPreviewSheet.swift  # Git-diff-style change preview before applying
+    ├── DuplicateReviewSheet.swift # Keep-one / trash extras for duplicate groups
     ├── ReportSheet.swift       # Post-fix summary with error log
     └── SettingsView.swift      # All settings tabs including Watch Folder
 ```

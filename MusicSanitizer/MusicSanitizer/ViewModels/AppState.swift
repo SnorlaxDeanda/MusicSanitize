@@ -19,6 +19,7 @@ class AppState: ObservableObject {
     @Published var lastReport:  FixReport?
     @Published var showDiffSheet   = false
     @Published var showReportSheet = false
+    @Published var showDuplicateSheet = false
     @Published var errorMessage: String?
     @Published var filterKind: IssueKind?
     @Published var filterShowOnlyIssues = false
@@ -64,6 +65,22 @@ class AppState: ObservableObject {
         return counts.sorted { $0.value > $1.value }
     }
 
+    var duplicateFileCount: Int {
+        files.filter { $0.duplicateGroupID != nil }.count
+    }
+
+    var duplicateGroups: [DuplicateGroup] {
+        var buckets: [UUID: [AudioFile]] = [:]
+        for file in files {
+            guard let gid = file.duplicateGroupID else { continue }
+            buckets[gid, default: []].append(file)
+        }
+        return buckets
+            .map { DuplicateGroup(id: $0.key, files: $0.value.sorted { $0.filename < $1.filename }) }
+            .filter { $0.files.count > 1 }
+            .sorted { $0.summaryLabel.localizedCaseInsensitiveCompare($1.summaryLabel) == .orderedAscending }
+    }
+
     // MARK: - Deferred bindings
     //
     // SwiftUI often writes presentation/selection bindings *during* a view
@@ -90,6 +107,10 @@ class AppState: ObservableObject {
 
     var showReportSheetBinding: Binding<Bool> {
         deferredBinding(\.showReportSheet)
+    }
+
+    var showDuplicateSheetBinding: Binding<Bool> {
+        deferredBinding(\.showDuplicateSheet)
     }
 
     var errorAlertBinding: Binding<Bool> {
@@ -265,6 +286,54 @@ class AppState: ObservableObject {
         panel.allowedContentTypes  = [.commaSeparatedText]
         guard panel.runModal() == .OK, let url = panel.url else { return }
         try? report.csvString.write(to: url, atomically: true, encoding: .utf8)
+    }
+
+    // MARK: - Duplicate deletion
+
+    /// Moves the given duplicate files to Trash and removes them from the scan list.
+    /// Always uses Trash (recoverable) — never permanent delete.
+    func deleteDuplicateFiles(ids: [UUID]) async -> DuplicateDeleteResult {
+        await Task.yield()
+
+        var result = DuplicateDeleteResult()
+        let idSet = Set(ids)
+        var trashedIDs = Set<UUID>()
+
+        for file in files where idSet.contains(file.id) && file.duplicateGroupID != nil {
+            do {
+                try FileManager.default.trashItem(at: file.url, resultingItemURL: nil)
+                trashedIDs.insert(file.id)
+                result.deleted += 1
+            } catch {
+                result.failed.append((file.url, error.localizedDescription))
+            }
+        }
+
+        await Task.yield()
+        files.removeAll { trashedIDs.contains($0.id) }
+        if let selected = selectedFileID, trashedIDs.contains(selected) {
+            selectedFileID = nil
+        }
+        recomputeDuplicateIssues()
+        return result
+    }
+
+    /// After removing some members of a group, drop the duplicate issue when
+    /// only one file remains (or none).
+    private func recomputeDuplicateIssues() {
+        var counts: [UUID: Int] = [:]
+        for file in files {
+            if let gid = file.duplicateGroupID {
+                counts[gid, default: 0] += 1
+            }
+        }
+        for i in files.indices {
+            guard let gid = files[i].duplicateGroupID else { continue }
+            if counts[gid, default: 0] < 2 {
+                files[i].duplicateGroupID = nil
+                files[i].issues.removeAll { $0.kind == .duplicate }
+            }
+        }
     }
 
     // MARK: - Safe publishing

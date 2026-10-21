@@ -162,3 +162,52 @@ enum IssueSeverity: String, Comparable {
         }
     }
 }
+
+// MARK: - Duplicate groups
+
+struct DuplicateGroup: Identifiable {
+    let id: UUID
+    let files: [AudioFile]
+
+    /// Prefer lossless / richer tags / larger file as the default keeper.
+    var suggestedKeepID: UUID {
+        files.max(by: { Self.keeperScore($0) < Self.keeperScore($1) })?.id
+            ?? files[0].id
+    }
+
+    var summaryLabel: String {
+        let titles = Set(files.compactMap { $0.tags.title }.filter { !$0.isEmpty })
+        if let title = titles.first, titles.count == 1 { return title }
+        return files[0].filename
+    }
+
+    static func keeperScore(_ file: AudioFile) -> Int {
+        var score = 0
+        switch file.format {
+        case .flac: score += 400
+        case .aiff: score += 350
+        case .wav:  score += 300
+        case .m4a:  score += 200
+        case .mp3:  score += 150
+        case .ogg:  score += 100
+        default:    score += 50
+        }
+        if file.tags.title != nil { score += 20 }
+        if file.tags.artist != nil { score += 20 }
+        if file.tags.album != nil { score += 15 }
+        if file.tags.year != nil { score += 10 }
+        if file.tags.trackNumber != nil { score += 10 }
+        if file.tags.hasEmbeddedArtwork { score += 25 }
+        // Slight preference for larger files (higher bitrate / lossless).
+        score += min(Int(file.fileSize / 100_000), 80)
+        // Prefer shallower Artist/Album paths over dump folders.
+        let depth = file.url.pathComponents.count
+        score += max(0, 40 - depth)
+        return score
+    }
+}
+
+struct DuplicateDeleteResult {
+    var deleted: Int = 0
+    var failed: [(URL, String)] = []
+}

@@ -69,6 +69,30 @@ struct SidebarView: View {
                 .buttonStyle(.plain)
                 .foregroundStyle(Color.accentColor)
             }
+
+            if !appState.duplicateGroups.isEmpty {
+                Section("Duplicates") {
+                    Button {
+                        appState.publishAfterViewUpdate {
+                            appState.showDuplicateSheet = true
+                        }
+                    } label: {
+                        Label {
+                            HStack {
+                                Text("Review & Delete…")
+                                Spacer()
+                                Text("\(appState.duplicateGroups.count)")
+                                    .foregroundStyle(.secondary)
+                                    .font(.caption)
+                            }
+                        } icon: {
+                            Image(systemName: "trash")
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color.accentColor)
+                }
+            }
         }
         .listStyle(.sidebar)
         .navigationTitle("Music Sanitizer")

@@ -53,6 +53,14 @@ struct FileDetailView: View {
                             }
                         }
                     }
+                    if file.duplicateGroupID != nil {
+                        Button {
+                            appState.showDuplicateSheet = true
+                        } label: {
+                            Label("Review Duplicates…", systemImage: "doc.on.doc")
+                        }
+                        .buttonStyle(.bordered)
+                    }
                     Divider()
                 }
 

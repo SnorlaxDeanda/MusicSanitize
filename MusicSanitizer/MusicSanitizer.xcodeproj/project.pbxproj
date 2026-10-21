@@ -23,6 +23,7 @@
 		D7C5A86837A9532101D25279 /* DiffPreviewSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A029557EAE3EAF693FEA7A5; };
 		452872A74D8920FA0BC434B6 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9CD8F648BE4BF53B906163F; };
 		FF7EE6520F47B647C04586F9 /* ReportSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E605F058CC309600B697212; };
+		A1B2C3D4E5F60718293A4B5C /* DuplicateReviewSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4E5F60718293A4B5C6D7E8F; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -42,6 +43,7 @@
 		3A029557EAE3EAF693FEA7A5 /* DiffPreviewSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffPreviewSheet.swift; sourceTree = "<group>"; };
 		B9CD8F648BE4BF53B906163F /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		6E605F058CC309600B697212 /* ReportSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportSheet.swift; sourceTree = "<group>"; };
+		D4E5F60718293A4B5C6D7E8F /* DuplicateReviewSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DuplicateReviewSheet.swift; sourceTree = "<group>"; };
 		6F7AC2C5D7574E3A6DE778A2 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		68FE6B60469E89A2B8FA6677 /* MusicSanitizer.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = MusicSanitizer.entitlements; sourceTree = "<group>"; };
 		4EC0923FF84651D50A3F91B0 /* MusicSanitizer.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MusicSanitizer.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -107,6 +109,7 @@
 				22C84F3378FE2697E78F49F8 /* FileListView.swift */,
 				EE85AF24B1CCD7B6C2D2796B /* FileDetailView.swift */,
 				3A029557EAE3EAF693FEA7A5 /* DiffPreviewSheet.swift */,
+				D4E5F60718293A4B5C6D7E8F /* DuplicateReviewSheet.swift */,
 				B9CD8F648BE4BF53B906163F /* SettingsView.swift */,
 				6E605F058CC309600B697212 /* ReportSheet.swift */,
 			);
@@ -191,6 +194,7 @@
 				E72097F6C2177A7C110123B8 /* FileListView.swift in Sources */,
 				979D3B27B9B595590639F2F1 /* FileDetailView.swift in Sources */,
 				D7C5A86837A9532101D25279 /* DiffPreviewSheet.swift in Sources */,
+				A1B2C3D4E5F60718293A4B5C /* DuplicateReviewSheet.swift in Sources */,
 				452872A74D8920FA0BC434B6 /* SettingsView.swift in Sources */,
 				FF7EE6520F47B647C04586F9 /* ReportSheet.swift in Sources */,
 			);
