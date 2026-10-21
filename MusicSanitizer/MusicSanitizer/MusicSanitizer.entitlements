@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Sandboxed app with file access and network -->
+    <key>com.apple.security.app-sandbox</key>
+    <true/>
+
+    <!-- Read/write access to user-selected folders -->
+    <key>com.apple.security.files.user-selected.read-write</key>
+    <true/>
+
+    <!-- Downloads folder read-write for music imports -->
+    <key>com.apple.security.files.downloads.read-write</key>
+    <true/>
+
+    <!-- Outbound network for MusicBrainz API + Cover Art Archive -->
+    <key>com.apple.security.network.client</key>
+    <true/>
+
+    <!-- User notifications for Watch Folder alerts -->
+    <key>com.apple.security.temporary-exception.files.home-relative-path.read-write</key>
+    <array/>
+</dict>
+</plist>

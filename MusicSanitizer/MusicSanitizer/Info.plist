@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDisplayName</key>
+    <string>Music Sanitizer</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.yourname.MusicSanitizer</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0.0</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>13.0</string>
+    <key>NSPrincipalClass</key>
+    <string>NSApplication</string>
+    <key>NSHumanReadableCopyright</key>
+    <string>Copyright © 2026. All rights reserved.</string>
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeExtensions</key>
+            <array>
+                <string>mp3</string>
+                <string>flac</string>
+                <string>m4a</string>
+                <string>aiff</string>
+                <string>aif</string>
+                <string>wav</string>
+            </array>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+            <key>CFBundleTypeName</key>
+            <string>Audio File</string>
+        </dict>
+    </array>
+    <!-- MusicBrainz requires a User-Agent -->
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsArbitraryLoads</key>
+        <false/>
+    </dict>
+    <!-- Privacy strings for system prompts -->
+    <key>NSAppleMusicUsageDescription</key>
+    <string>Music Sanitizer reads your music files to clean up tags and folder structure.</string>
+</dict>
+</plist>
