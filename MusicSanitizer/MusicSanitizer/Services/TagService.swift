@@ -217,9 +217,18 @@ actor TagService {
 
     // MARK: - Tool paths
 
-    static func ffmpegPath() throws -> String {
-        if let cached = ToolPathCache.ffmpeg,
-           FileManager.default.isExecutableFile(atPath: cached) {
+    /// Snapshot for Settings / diagnostics (never throws).
+    nonisolated static func ffmpegStatus() -> FFmpegStatus {
+        do {
+            let path = try ffmpegPath()
+            return .found(path)
+        } catch {
+            return .missing
+        }
+    }
+
+    nonisolated static func ffmpegPath() throws -> String {
+        if let cached = ToolPathCache.ffmpeg, isUsableTool(at: cached) {
             return cached
         }
         let path = try resolveTool(named: "ffmpeg")
@@ -227,9 +236,8 @@ actor TagService {
         return path
     }
 
-    static func ffprobePath() throws -> String {
-        if let cached = ToolPathCache.ffprobe,
-           FileManager.default.isExecutableFile(atPath: cached) {
+    nonisolated static func ffprobePath() throws -> String {
+        if let cached = ToolPathCache.ffprobe, isUsableTool(at: cached) {
             return cached
         }
         // Prefer a real ffprobe; fall back to ffmpeg if needed.
@@ -240,9 +248,9 @@ actor TagService {
         return try ffmpegPath()
     }
 
-    /// Locates an ffmpeg-family binary: bundled copy, common Homebrew paths,
-    /// then the user's login-shell PATH (so Apple Silicon Homebrew is found).
-    private static func resolveTool(named name: String) throws -> String {
+    /// Locates an ffmpeg-family binary: bundled copy, login-shell / brew
+    /// prefix, then well-known Homebrew paths on Apple Silicon and Intel.
+    nonisolated private static func resolveTool(named name: String) throws -> String {
         var candidates: [String] = []
 
         if let bundled = Bundle.main.path(forResource: name, ofType: nil) {
@@ -251,30 +259,50 @@ actor TagService {
         if let fromShell = resolveViaLoginShell(name) {
             candidates.append(fromShell)
         }
+        if let brewPrefix = resolveBrewPrefix() {
+            candidates.append("\(brewPrefix)/bin/\(name)")
+        }
         candidates += [
-            "/opt/homebrew/bin/\(name)",
-            "/usr/local/bin/\(name)",
+            "/opt/homebrew/bin/\(name)",           // Apple Silicon Homebrew
+            "/usr/local/bin/\(name)",              // Intel Homebrew
+            "/opt/local/bin/\(name)",              // MacPorts
+            "\(NSHomeDirectory())/homebrew/bin/\(name)",
             "/usr/bin/\(name)",
         ]
 
         // Deduplicate while preserving order
         var seen = Set<String>()
         for path in candidates where seen.insert(path).inserted {
-            if FileManager.default.isExecutableFile(atPath: path) {
-                return path
-            }
-            // Homebrew symlinks can look non-executable to isExecutableFile
-            // when the target is fine — resolve and re-check.
-            if let resolved = resolveSymlinks(path),
-               resolved != path,
-               FileManager.default.isExecutableFile(atPath: resolved) {
-                return resolved
+            if let usable = usableToolPath(path) {
+                return usable
             }
         }
         throw TagError.ffmpegNotFound
     }
 
-    private static func resolveSymlinks(_ path: String) -> String? {
+    /// Returns a path we can hand to `Process` (resolving Homebrew symlinks).
+    nonisolated private static func usableToolPath(_ path: String) -> String? {
+        if isUsableTool(at: path) { return path }
+        if let resolved = resolveSymlinks(path), resolved != path, isUsableTool(at: resolved) {
+            return resolved
+        }
+        return nil
+    }
+
+    nonisolated private static func isUsableTool(at path: String) -> Bool {
+        let fm = FileManager.default
+        var isDirectory: ObjCBool = false
+        guard fm.fileExists(atPath: path, isDirectory: &isDirectory),
+              !isDirectory.boolValue else {
+            return false
+        }
+        // Prefer the executable bit, but Homebrew cellars / sandbox edge cases
+        // sometimes make isExecutableFile return false for a real binary.
+        if fm.isExecutableFile(atPath: path) { return true }
+        return fm.isReadableFile(atPath: path)
+    }
+
+    nonisolated private static func resolveSymlinks(_ path: String) -> String? {
         let url = URL(fileURLWithPath: path)
         let resolved = url.resolvingSymlinksInPath().path
         return FileManager.default.fileExists(atPath: resolved) ? resolved : nil
@@ -282,10 +310,18 @@ actor TagService {
 
     /// Asks the login shell where a tool lives — picks up Homebrew on PATH
     /// even when the GUI app's environment is minimal.
-    private static func resolveViaLoginShell(_ name: String) -> String? {
+    nonisolated private static func resolveViaLoginShell(_ name: String) -> String? {
+        // Only ever called with fixed literals ("ffmpeg" / "ffprobe").
+        let safeName = name.replacingOccurrences(of: "[^A-Za-z0-9_-]", with: "", options: .regularExpression)
+        guard safeName == name, !name.isEmpty else { return nil }
+
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        proc.arguments = ["-lc", "command -v \(name)"]
+        // Prepend Homebrew prefixes so GUI-launched apps still find brew tools.
+        proc.arguments = [
+            "-lc",
+            "export PATH=\"/opt/homebrew/bin:/usr/local/bin:/opt/local/bin:$PATH\"; command -v \(safeName)",
+        ]
         let out = Pipe()
         proc.standardOutput = out
         proc.standardError = Pipe()
@@ -295,8 +331,31 @@ actor TagService {
             guard proc.terminationStatus == 0 else { return nil }
             let path = String(data: out.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            guard let path, !path.isEmpty else { return nil }
+            guard let path, !path.isEmpty, path.hasPrefix("/") else { return nil }
             return path
+        } catch {
+            return nil
+        }
+    }
+
+    nonisolated private static func resolveBrewPrefix() -> String? {
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        proc.arguments = [
+            "-lc",
+            "export PATH=\"/opt/homebrew/bin:/usr/local/bin:$PATH\"; brew --prefix 2>/dev/null",
+        ]
+        let out = Pipe()
+        proc.standardOutput = out
+        proc.standardError = Pipe()
+        do {
+            try proc.run()
+            proc.waitUntilExit()
+            guard proc.terminationStatus == 0 else { return nil }
+            let prefix = String(data: out.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let prefix, !prefix.isEmpty, prefix.hasPrefix("/") else { return nil }
+            return prefix
         } catch {
             return nil
         }
@@ -333,6 +392,16 @@ actor TagService {
             let proc = Process()
             proc.executableURL = URL(fileURLWithPath: path)
             proc.arguments = args
+            // GUI apps inherit a minimal PATH; Homebrew ffmpeg may call
+            // sibling tools, so keep brew prefixes available.
+            var env = ProcessInfo.processInfo.environment
+            let brewPath = "/opt/homebrew/bin:/usr/local/bin:/opt/local/bin"
+            if let existing = env["PATH"], !existing.isEmpty {
+                env["PATH"] = "\(brewPath):\(existing)"
+            } else {
+                env["PATH"] = "\(brewPath):/usr/bin:/bin"
+            }
+            proc.environment = env
             let outPipe = Pipe()
             let errPipe = Pipe()
             proc.standardOutput = outPipe
@@ -348,6 +417,57 @@ actor TagService {
     }
 }
 
+// MARK: - Tool path cache / status
+
+private enum ToolPathCache {
+    private static let lock = NSLock()
+    private static var _ffmpeg: String?
+    private static var _ffprobe: String?
+
+    static var ffmpeg: String? {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return _ffmpeg
+        }
+        set {
+            lock.lock()
+            defer { lock.unlock() }
+            _ffmpeg = newValue
+        }
+    }
+
+    static var ffprobe: String? {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return _ffprobe
+        }
+        set {
+            lock.lock()
+            defer { lock.unlock() }
+            _ffprobe = newValue
+        }
+    }
+}
+
+enum FFmpegStatus: Equatable {
+    case found(String)
+    case missing
+
+    var isAvailable: Bool {
+        if case .found = self { return true }
+        return false
+    }
+
+    var displayPath: String {
+        switch self {
+        case .found(let path): return path
+        case .missing: return "Not found"
+        }
+    }
+}
+
 // MARK: - Errors
 
 enum TagError: LocalizedError {
@@ -359,7 +479,12 @@ enum TagError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .ffmpegNotFound:
-            return "ffmpeg not found. Install via Homebrew (`brew install ffmpeg`), then fully quit and relaunch Music Sanitizer so it can see /opt/homebrew/bin/ffmpeg."
+            return """
+            ffmpeg not found. Terminal can see Homebrew installs that a sandboxed \
+            build cannot. In this build App Sandbox is off — fully quit Music Sanitizer \
+            (⌘Q), clean build in Xcode (Product → Clean Build Folder), run again, and \
+            confirm `ls /opt/homebrew/bin/ffmpeg` works in Terminal.
+            """
         case .ffmpegFailed(let msg):
             return "ffmpeg error: \(msg)"
         case .ffprobeFailed(let msg):

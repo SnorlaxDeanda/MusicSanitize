@@ -40,12 +40,19 @@ standardising filenames, and organising folder structure.
   ```
   brew install ffmpeg
   ```
+  On Apple Silicon, Homebrew installs to `/opt/homebrew/bin/ffmpeg`. Confirm with:
+  ```
+  which ffmpeg
+  ls -l /opt/homebrew/bin/ffmpeg
+  ```
   The app resolves ffmpeg via (in order) a bundled copy in Resources, your login
-  shell `PATH`, then `/opt/homebrew/bin` and `/usr/local/bin`.
+  shell `PATH` / `brew --prefix`, then `/opt/homebrew/bin`, `/usr/local/bin`,
+  and MacPorts. Settings → General shows the path it found.
 
-  App Sandbox is disabled so the process can actually execute Homebrew’s
-  ffmpeg. A sandboxed build reports “ffmpeg not found” even when `which ffmpeg`
-  works in Terminal.
+  **App Sandbox is disabled** so the process can execute Homebrew’s ffmpeg.
+  A sandboxed build reports “ffmpeg not found” even when `brew install ffmpeg`
+  says it’s already installed. After pulling this change: ⌘Q the app,
+  Product → Clean Build Folder, then ⌘R.
 
 ## Building
 

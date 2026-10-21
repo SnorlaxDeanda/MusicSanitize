@@ -18,13 +18,14 @@ struct SettingsView: View {
         }
         .environmentObject(appState)
         .padding(20)
-        .frame(width: 480, height: 340)
+        .frame(width: 480, height: 420)
     }
 }
 
 struct GeneralSettingsTab: View {
     @EnvironmentObject var appState: AppState
     var s: ScanSettings { appState.settings }
+    @State private var ffmpegStatus = TagService.ffmpegStatus()
 
     var body: some View {
         Form {
@@ -49,8 +50,32 @@ struct GeneralSettingsTab: View {
                     Toggle("WAV",  isOn: Binding(get: { s.processWAV },  set: { s.processWAV  = $0 }))
                 }
             }
+            Section("ffmpeg") {
+                HStack(alignment: .firstTextBaseline) {
+                    Image(systemName: ffmpegStatus.isAvailable ? "checkmark.circle.fill" : "xmark.circle.fill")
+                        .foregroundStyle(ffmpegStatus.isAvailable ? .green : .red)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(ffmpegStatus.isAvailable ? "Found" : "Not found")
+                            .font(.body.weight(.medium))
+                        Text(ffmpegStatus.displayPath)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                        if !ffmpegStatus.isAvailable {
+                            Text("Install with `brew install ffmpeg`, then ⌘Q and relaunch. Apple Silicon path: /opt/homebrew/bin/ffmpeg")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    Spacer()
+                    Button("Recheck") {
+                        ffmpegStatus = TagService.ffmpegStatus()
+                    }
+                }
+            }
         }
         .formStyle(.grouped)
+        .onAppear { ffmpegStatus = TagService.ffmpegStatus() }
     }
 }
 
