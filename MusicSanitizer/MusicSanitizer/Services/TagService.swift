@@ -235,6 +235,30 @@ actor TagService {
         return try ffmpegPath()
     }
 
+    // MARK: - Metadata helpers
+
+    private func stringValue(from items: [AVMetadataItem], key: AVMetadataKey) -> String? {
+        cleaned(items.first { $0.commonKey == key }?.stringValue)
+    }
+
+    private func stringValue(from items: [AVMetadataItem], identifier: AVMetadataIdentifier) -> String? {
+        cleaned(items.first { $0.identifier == identifier }?.stringValue)
+    }
+
+    private func stringValue(from items: [AVMetadataItem], id3Key: String) -> String? {
+        if let identifier = AVMetadataItem.identifier(forKey: id3Key as NSString, keySpace: .id3),
+           let value = stringValue(from: items, identifier: identifier) {
+            return value
+        }
+        return cleaned(items.first { ($0.key as? String) == id3Key }?.stringValue)
+    }
+
+    private func cleaned(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
     // MARK: - Process runner
 
     private func runProcess(_ path: String, args: [String]) async throws -> (exitCode: Int32, stdout: String, stderr: String) {
@@ -278,3 +302,4 @@ enum TagError: LocalizedError {
         }
     }
 }
+

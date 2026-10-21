@@ -246,14 +246,14 @@ actor ScanService {
         var hasher = SHA256()
 
         // First chunk
-        let head = try fh.read(upToCount: chunkSize)
+        let head = try fh.read(upToCount: chunkSize) ?? Data()
         hasher.update(data: head)
 
         // Last chunk (skip if file is smaller than 2 chunks)
         let fileSize = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
         if fileSize > chunkSize * 2 {
             try fh.seek(toOffset: UInt64(fileSize - chunkSize))
-            let tail = try fh.read(upToCount: chunkSize)
+            let tail = try fh.read(upToCount: chunkSize) ?? Data()
             hasher.update(data: tail)
         }
 
