@@ -118,8 +118,10 @@ class AppState: ObservableObject {
             get: { self.errorMessage != nil },
             set: { newValue in
                 guard !newValue else { return }
-                self.publishAfterViewUpdate { [weak self] in
-                    self?.errorMessage = nil
+                // Strong capture is intentional: Binding is owned by the view
+                // that already holds AppState; avoid mixed weak/strong captures.
+                self.publishAfterViewUpdate {
+                    self.errorMessage = nil
                 }
             }
         )
@@ -130,9 +132,9 @@ class AppState: ObservableObject {
     ) -> Binding<Value> {
         Binding(
             get: { self[keyPath: keyPath] },
-            set: { [weak self] newValue in
-                DispatchQueue.main.async {
-                    self?[keyPath: keyPath] = newValue
+            set: { newValue in
+                self.publishAfterViewUpdate {
+                    self[keyPath: keyPath] = newValue
                 }
             }
         )
@@ -151,12 +153,12 @@ class AppState: ObservableObject {
         // NSOpenPanel dismissal itself triggers SwiftUI view updates. Mutating
         // @Published here races that pass and triggers the publishing warning.
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        publishAfterViewUpdate { [weak self] in
-            self?.scanRoot = url
-            self?.files = []
-            self?.lastReport = nil
-            self?.selectedFileID = nil
-            self?.errorMessage = nil
+        publishAfterViewUpdate {
+            self.scanRoot = url
+            self.files = []
+            self.lastReport = nil
+            self.selectedFileID = nil
+            self.errorMessage = nil
         }
     }
 
@@ -205,30 +207,26 @@ class AppState: ObservableObject {
 
     func toggleSelection(_ file: AudioFile) {
         // Defer so the row button's view update isn't still in flight.
-        publishAfterViewUpdate { [weak self] in
-            guard let self,
-                  let i = self.files.firstIndex(where: { $0.id == file.id }) else { return }
+        publishAfterViewUpdate {
+            guard let i = self.files.firstIndex(where: { $0.id == file.id }) else { return }
             self.files[i].isSelected.toggle()
         }
     }
 
     func selectAll() {
-        publishAfterViewUpdate { [weak self] in
-            guard let self else { return }
+        publishAfterViewUpdate {
             for i in self.files.indices { self.files[i].isSelected = true }
         }
     }
 
     func deselectAll() {
-        publishAfterViewUpdate { [weak self] in
-            guard let self else { return }
+        publishAfterViewUpdate {
             for i in self.files.indices { self.files[i].isSelected = false }
         }
     }
 
     func selectOnlyIssues() {
-        publishAfterViewUpdate { [weak self] in
-            guard let self else { return }
+        publishAfterViewUpdate {
             for i in self.files.indices {
                 self.files[i].isSelected = self.files[i].hasIssues
             }
@@ -263,8 +261,8 @@ class AppState: ObservableObject {
             await progress.flush(into: self)
             await Task.yield()
             lastReport = report
-            publishAfterViewUpdate { [weak self] in
-                self?.showReportSheet = true
+            publishAfterViewUpdate {
+                self.showReportSheet = true
             }
             await scan()
         } catch {
@@ -341,8 +339,21 @@ class AppState: ObservableObject {
     /// Schedules work for the next main run-loop turn, after any in-flight
     /// SwiftUI view update (modal dismissal, layout pass, etc.) has finished.
     func publishAfterViewUpdate(_ work: @escaping () -> Void) {
-        DispatchQueue.main.async(execute: work)
+        // `DispatchQueue.main.async` requires `@Sendable`. AppState work always
+        // runs on the main actor and only touches UI state, so wrap unchecked.
+        let job = MainActorWork(work)
+        DispatchQueue.main.async {
+            job.perform()
+        }
     }
+}
+
+/// Boxes a main-actor UI update so it can cross `DispatchQueue.main.async`'s
+/// `@Sendable` boundary without claiming AppState itself is Sendable.
+private struct MainActorWork: @unchecked Sendable {
+    private let work: () -> Void
+    init(_ work: @escaping () -> Void) { self.work = work }
+    func perform() { work() }
 }
 
 // MARK: - Progress coalescing
