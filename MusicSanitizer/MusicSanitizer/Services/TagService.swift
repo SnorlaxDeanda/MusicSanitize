@@ -188,10 +188,7 @@ actor TagService {
         let result = try await runProcess(ffmpeg, args: args)
         if result.exitCode != 0 { throw TagError.ffmpegFailed(result.stderr) }
 
-        try FileManager.default.replaceItem(at: url, withItemAt: tmp,
-                                            backupItemName: nil,
-                                            options: .usingNewMetadataOnly,
-                                            resultingItemURL: nil)
+        try Self.atomicallyReplace(url, with: tmp)
     }
 
     // MARK: - Strip oversized artwork
@@ -209,10 +206,35 @@ actor TagService {
         let result = try await runProcess(ffmpeg, args: args)
         if result.exitCode != 0 { throw TagError.ffmpegFailed(result.stderr) }
 
-        try FileManager.default.replaceItem(at: url, withItemAt: tmp,
-                                            backupItemName: nil,
-                                            options: .usingNewMetadataOnly,
-                                            resultingItemURL: nil)
+        try Self.atomicallyReplace(url, with: tmp)
+    }
+
+    /// Replaces `original` with `newFile`, falling back when `replaceItem`
+    /// hits POSIX EEXIST / OSStatus -48 (dupFNErr) on some volumes.
+    nonisolated private static func atomicallyReplace(_ original: URL, with newFile: URL) throws {
+        let fm = FileManager.default
+        do {
+            _ = try fm.replaceItemAt(
+                original,
+                withItemAt: newFile,
+                backupItemName: nil,
+                options: [.usingNewMetadataOnly]
+            )
+            return
+        } catch {
+            // Fall through to a two-step swap.
+        }
+
+        let backup = original.deletingLastPathComponent()
+            .appendingPathComponent(".__ms_bak_\(UUID().uuidString)_\(original.lastPathComponent)")
+        try fm.moveItem(at: original, to: backup)
+        do {
+            try fm.moveItem(at: newFile, to: original)
+            try? fm.removeItem(at: backup)
+        } catch {
+            try? fm.moveItem(at: backup, to: original)
+            throw error
+        }
     }
 
     // MARK: - Tool paths

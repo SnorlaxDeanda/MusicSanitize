@@ -128,30 +128,68 @@ actor FixService {
 
     private func moveFile(from source: URL, to dest: URL, root: URL) throws {
         let fm = FileManager.default
+        let sourcePath = source.standardizedFileURL.path
+        let destPath = dest.standardizedFileURL.path
+
+        // Already at the destination — nothing to do.
+        if sourcePath == destPath { return }
+
         try fm.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
 
-        // If destination exists, add a suffix
-        var finalDest = dest
-        var counter = 1
-        while fm.fileExists(atPath: finalDest.path) {
-            let base = dest.deletingPathExtension().lastPathComponent
-            let ext  = dest.pathExtension
-            finalDest = dest.deletingLastPathComponent()
-                .appendingPathComponent("\(base) (\(counter)).\(ext)")
-            counter += 1
+        // Case-only rename on case-insensitive volumes (APFS default).
+        // `moveItem` reports POSIX 17 / OSStatus -48 (dupFNErr) otherwise.
+        if sourcePath.compare(destPath, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame {
+            try caseOnlyRename(from: source, to: dest)
+            return
         }
 
+        let finalDest = uniqueDestination(for: dest, avoiding: source, fileManager: fm)
         try fm.moveItem(at: source, to: finalDest)
 
         // Remove empty source directories up to root
         var dir = source.deletingLastPathComponent()
-        while dir.path != root.path {
+        while dir.path.hasPrefix(root.path), dir.path != root.path {
             let contents = (try? fm.contentsOfDirectory(atPath: dir.path)) ?? []
             if contents.isEmpty {
                 try? fm.removeItem(at: dir)
+            } else {
+                break
             }
             dir = dir.deletingLastPathComponent()
         }
+    }
+
+    /// Two-step rename so only the casing/diacritics of the leaf name change.
+    private func caseOnlyRename(from source: URL, to dest: URL) throws {
+        let fm = FileManager.default
+        let tmp = source.deletingLastPathComponent()
+            .appendingPathComponent(".__ms_rename_\(UUID().uuidString)_\(source.lastPathComponent)")
+        try fm.moveItem(at: source, to: tmp)
+        do {
+            try fm.moveItem(at: tmp, to: dest)
+        } catch {
+            // Best-effort restore if the second hop fails.
+            try? fm.moveItem(at: tmp, to: source)
+            throw error
+        }
+    }
+
+    /// Picks `dest`, or `name (1).ext`, `name (2).ext`, … while skipping the
+    /// source path itself (needed when only casing differs — already handled).
+    private func uniqueDestination(for dest: URL, avoiding source: URL, fileManager fm: FileManager) -> URL {
+        var candidate = dest
+        var counter = 1
+        let sourcePath = source.standardizedFileURL.path
+        while fm.fileExists(atPath: candidate.path),
+              candidate.standardizedFileURL.path != sourcePath {
+            let base = dest.deletingPathExtension().lastPathComponent
+            let ext = dest.pathExtension
+            let leaf = ext.isEmpty ? "\(base) (\(counter))" : "\(base) (\(counter)).\(ext)"
+            candidate = dest.deletingLastPathComponent().appendingPathComponent(leaf)
+            counter += 1
+            if counter > 10_000 { break }
+        }
+        return candidate
     }
 }
 
