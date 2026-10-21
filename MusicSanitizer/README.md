@@ -40,8 +40,12 @@ standardising filenames, and organising folder structure.
   ```
   brew install ffmpeg
   ```
-  The app will detect ffmpeg at `/usr/local/bin/ffmpeg` or `/opt/homebrew/bin/ffmpeg`,
-  or you can bundle a static build inside the app's Resources folder.
+  The app resolves ffmpeg via (in order) a bundled copy in Resources, your login
+  shell `PATH`, then `/opt/homebrew/bin` and `/usr/local/bin`.
+
+  App Sandbox is disabled so the process can actually execute Homebrew’s
+  ffmpeg. A sandboxed build reports “ffmpeg not found” even when `which ffmpeg`
+  works in Terminal.
 
 ## Building
 

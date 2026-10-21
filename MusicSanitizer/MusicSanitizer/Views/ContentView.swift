@@ -57,21 +57,22 @@ struct ContentView: View {
                 }
             }
         }
-        .sheet(isPresented: $appState.showDiffSheet) {
+        .sheet(isPresented: appState.showDiffSheetBinding) {
             DiffPreviewSheet()
                 .environmentObject(appState)
                 .frame(minWidth: 700, minHeight: 500)
         }
-        .sheet(isPresented: $appState.showReportSheet) {
+        .sheet(isPresented: appState.showReportSheetBinding) {
             ReportSheet()
                 .environmentObject(appState)
                 .frame(minWidth: 500, minHeight: 400)
         }
-        .alert("Error", isPresented: Binding(
-            get: { appState.errorMessage != nil },
-            set: { if !$0 { appState.errorMessage = nil } }
-        )) {
-            Button("OK") { appState.errorMessage = nil }
+        .alert("Error", isPresented: appState.errorAlertBinding) {
+            Button("OK") {
+                appState.publishAfterViewUpdate {
+                    appState.errorMessage = nil
+                }
+            }
         } message: {
             Text(appState.errorMessage ?? "")
         }

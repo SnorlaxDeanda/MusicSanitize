@@ -64,6 +64,59 @@ class AppState: ObservableObject {
         return counts.sorted { $0.value > $1.value }
     }
 
+    // MARK: - Deferred bindings
+    //
+    // SwiftUI often writes presentation/selection bindings *during* a view
+    // update (sheet dismiss, List clearing invalid selection, Toggle, etc.).
+    // Writing @Published in that window triggers:
+    // "Publishing changes from within view updates is not allowed…"
+    // These bindings hop to the next main run-loop turn before mutating state.
+
+    var selectedFileIDBinding: Binding<UUID?> {
+        deferredBinding(\.selectedFileID)
+    }
+
+    var filterShowOnlyIssuesBinding: Binding<Bool> {
+        deferredBinding(\.filterShowOnlyIssues)
+    }
+
+    var sortOrderBinding: Binding<SortOrder> {
+        deferredBinding(\.sortOrder)
+    }
+
+    var showDiffSheetBinding: Binding<Bool> {
+        deferredBinding(\.showDiffSheet)
+    }
+
+    var showReportSheetBinding: Binding<Bool> {
+        deferredBinding(\.showReportSheet)
+    }
+
+    var errorAlertBinding: Binding<Bool> {
+        Binding(
+            get: { self.errorMessage != nil },
+            set: { newValue in
+                guard !newValue else { return }
+                self.publishAfterViewUpdate { [weak self] in
+                    self?.errorMessage = nil
+                }
+            }
+        )
+    }
+
+    func deferredBinding<Value>(
+        _ keyPath: ReferenceWritableKeyPath<AppState, Value>
+    ) -> Binding<Value> {
+        Binding(
+            get: { self[keyPath: keyPath] },
+            set: { [weak self] newValue in
+                DispatchQueue.main.async {
+                    self?[keyPath: keyPath] = newValue
+                }
+            }
+        )
+    }
+
     // MARK: - Folder selection
 
     func requestFolderSelection() {
@@ -75,8 +128,7 @@ class AppState: ObservableObject {
         panel.message = "Choose the root folder of your music library"
 
         // NSOpenPanel dismissal itself triggers SwiftUI view updates. Mutating
-        // @Published synchronously here races that pass and triggers:
-        // "Publishing changes from within view updates is not allowed…"
+        // @Published here races that pass and triggers the publishing warning.
         guard panel.runModal() == .OK, let url = panel.url else { return }
         publishAfterViewUpdate { [weak self] in
             self?.scanRoot = url
@@ -91,31 +143,38 @@ class AppState: ObservableObject {
 
     func scan() async {
         guard let root = scanRoot else { return }
+
+        // Let the triggering control's view update finish first.
+        await Task.yield()
+
         isScanning = true
         scanProgress = 0
-        scanStatus = ""
-        files = []
+        scanStatus = "Starting…"
         selectedFileID = nil
         errorMessage = nil
+        files = []
 
         let service = ScanService(settings: settings)
         scanService = service
 
-        let progress = ProgressPublisher { [weak self] value, status in
-            self?.scanProgress = value
-            self?.scanStatus = status
-        }
+        let progress = ProgressPublisher()
+        progress.attach(self)
+        defer { progress.detach() }
 
         do {
             let result = try await service.scan(root: root) { value, status in
                 progress.update(value, status: status)
             }
-            await progress.flush()
+            await progress.flush(into: self)
+            // Yield so the last progress-driven render can complete before we
+            // swap the file list and tear down the scanning UI.
+            await Task.yield()
             files = result
         } catch {
             errorMessage = error.localizedDescription
         }
 
+        await Task.yield()
         isScanning = false
         scanStatus = ""
         scanProgress = 0
@@ -124,33 +183,55 @@ class AppState: ObservableObject {
     // MARK: - Toggle selection
 
     func toggleSelection(_ file: AudioFile) {
-        if let i = files.firstIndex(where: { $0.id == file.id }) {
-            files[i].isSelected.toggle()
+        // Defer so the row button's view update isn't still in flight.
+        publishAfterViewUpdate { [weak self] in
+            guard let self,
+                  let i = self.files.firstIndex(where: { $0.id == file.id }) else { return }
+            self.files[i].isSelected.toggle()
         }
     }
 
-    func selectAll()   { for i in files.indices { files[i].isSelected = true  } }
-    func deselectAll() { for i in files.indices { files[i].isSelected = false } }
+    func selectAll() {
+        publishAfterViewUpdate { [weak self] in
+            guard let self else { return }
+            for i in self.files.indices { self.files[i].isSelected = true }
+        }
+    }
+
+    func deselectAll() {
+        publishAfterViewUpdate { [weak self] in
+            guard let self else { return }
+            for i in self.files.indices { self.files[i].isSelected = false }
+        }
+    }
+
     func selectOnlyIssues() {
-        for i in files.indices { files[i].isSelected = files[i].hasIssues }
+        publishAfterViewUpdate { [weak self] in
+            guard let self else { return }
+            for i in self.files.indices {
+                self.files[i].isSelected = self.files[i].hasIssues
+            }
+        }
     }
 
     // MARK: - Apply fixes
 
     func applyFixes() async {
         guard let root = scanRoot else { return }
+
+        await Task.yield()
+
         isApplying = true
         scanProgress = 0
-        scanStatus = ""
+        scanStatus = "Starting…"
         errorMessage = nil
 
         let service = FixService(settings: settings)
         fixService = service
 
-        let progress = ProgressPublisher { [weak self] value, status in
-            self?.scanProgress = value
-            self?.scanStatus = status
-        }
+        let progress = ProgressPublisher()
+        progress.attach(self)
+        defer { progress.detach() }
 
         do {
             let report = try await service.applyFixes(
@@ -158,10 +239,9 @@ class AppState: ObservableObject {
             ) { value, status in
                 progress.update(value, status: status)
             }
-            await progress.flush()
+            await progress.flush(into: self)
+            await Task.yield()
             lastReport = report
-            // Present the sheet on the next turn — applying often completes
-            // while the progress UI is still tearing down.
             publishAfterViewUpdate { [weak self] in
                 self?.showReportSheet = true
             }
@@ -170,6 +250,7 @@ class AppState: ObservableObject {
             errorMessage = error.localizedDescription
         }
 
+        await Task.yield()
         isApplying = false
         scanStatus = ""
         scanProgress = 0
@@ -197,19 +278,16 @@ class AppState: ObservableObject {
 
 // MARK: - Progress coalescing
 
-/// Forwards progress onto the main queue at most once per run-loop turn.
-/// `DispatchQueue.main.async` (not `Task { @MainActor }`) is intentional:
-/// unstructured main-actor tasks can still run inside SwiftUI's current
-/// update, which produces the publishing warning when scanning a folder.
+/// Delivers progress on the next main run-loop turn, applying state
+/// *synchronously* inside `DispatchQueue.main.async`.
+///
+/// Important: do **not** wrap the apply in `Task { @MainActor in … }`.
+/// Unstructured main-actor tasks can still execute inside SwiftUI's current
+/// update pass and re-trigger the publishing warning.
 final class ProgressPublisher: @unchecked Sendable {
-    private let apply: @MainActor (Double, String) -> Void
     private let lock = NSLock()
     private var pending: (Double, String)?
     private var scheduled = false
-
-    init(apply: @escaping @MainActor (Double, String) -> Void) {
-        self.apply = apply
-    }
 
     func update(_ value: Double, status: String) {
         lock.lock()
@@ -220,41 +298,65 @@ final class ProgressPublisher: @unchecked Sendable {
 
         guard needsSchedule else { return }
         DispatchQueue.main.async { [weak self] in
-            self?.deliverOnMain(completion: nil)
+            self?.deliverOnMain(into: nil, completion: nil)
         }
     }
 
-    /// Ensures the latest progress value is applied before continuing.
-    func flush() async {
+    @MainActor
+    func flush(into appState: AppState) async {
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             DispatchQueue.main.async { [weak self] in
                 guard let self else {
                     continuation.resume()
                     return
                 }
-                self.deliverOnMain {
+                self.deliverOnMain(into: appState) {
                     continuation.resume()
                 }
             }
         }
     }
 
-    /// Called from `DispatchQueue.main.async` so we are outside SwiftUI's
-    /// view-update window. The nested MainActor task then publishes safely.
-    private func deliverOnMain(completion: (() -> Void)?) {
+    /// Must only be called from `DispatchQueue.main.async`.
+    private func deliverOnMain(into appState: AppState?, completion: (() -> Void)?) {
         lock.lock()
         let next = pending
         pending = nil
         scheduled = false
         lock.unlock()
 
-        Task { @MainActor in
-            if let next {
-                apply(next.0, next.1)
+        if let next {
+            MainActor.assumeIsolated {
+                if let appState {
+                    appState.scanProgress = next.0
+                    appState.scanStatus = next.1
+                } else if let shared = AppStateProgressTarget.current {
+                    shared.scanProgress = next.0
+                    shared.scanStatus = next.1
+                }
             }
-            completion?()
         }
+        completion?()
     }
+
+    /// Registers the active AppState so coalesced progress ticks (which don't
+    /// carry an AppState reference) can still apply on the main queue.
+    @MainActor
+    func attach(_ appState: AppState) {
+        AppStateProgressTarget.current = appState
+    }
+
+    @MainActor
+    func detach() {
+        AppStateProgressTarget.current = nil
+    }
+}
+
+/// Weak box so progress callbacks scheduled without a strong AppState capture
+/// can still publish onto the live view-model.
+@MainActor
+enum AppStateProgressTarget {
+    static weak var current: AppState?
 }
 
 enum SortOrder: String, CaseIterable {
