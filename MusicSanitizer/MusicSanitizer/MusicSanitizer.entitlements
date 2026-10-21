@@ -2,24 +2,25 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <!-- Sandboxed app with file access and network -->
+    <!--
+      Sandbox is OFF on purpose.
+
+      Tag writing shells out to Homebrew ffmpeg/ffprobe
+      (/opt/homebrew/bin or /usr/local/bin). A sandboxed app cannot
+      see or execute those binaries, which produced:
+      "Tag write failed: ffmpeg not found" even when ffmpeg was installed.
+
+      This is a personal library utility that already requires full access
+      to a user-chosen music folder, so sandboxing adds little protection
+      while breaking the core feature.
+    -->
     <key>com.apple.security.app-sandbox</key>
-    <true/>
+    <false/>
 
-    <!-- Read/write access to user-selected folders -->
-    <key>com.apple.security.files.user-selected.read-write</key>
+    <!-- Hardened Runtime: allow spawning the Homebrew ffmpeg child process -->
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
     <true/>
-
-    <!-- Downloads folder read-write for music imports -->
-    <key>com.apple.security.files.downloads.read-write</key>
+    <key>com.apple.security.cs.disable-library-validation</key>
     <true/>
-
-    <!-- Outbound network for MusicBrainz API + Cover Art Archive -->
-    <key>com.apple.security.network.client</key>
-    <true/>
-
-    <!-- User notifications for Watch Folder alerts -->
-    <key>com.apple.security.temporary-exception.files.home-relative-path.read-write</key>
-    <array/>
 </dict>
 </plist>

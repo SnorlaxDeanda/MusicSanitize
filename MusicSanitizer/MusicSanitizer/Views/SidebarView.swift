@@ -17,7 +17,9 @@ struct SidebarView: View {
             // Issue filter
             if !appState.issueBreakdown.isEmpty {
                 Section("Filter by Issue") {
-                    Button(action: { appState.filterKind = nil }) {
+                    Button(action: {
+                        appState.publishAfterViewUpdate { appState.filterKind = nil }
+                    }) {
                         Label {
                             HStack {
                                 Text("All Files")
@@ -34,7 +36,9 @@ struct SidebarView: View {
                     .listRowBackground(appState.filterKind == nil ? Color.accentColor.opacity(0.15) : Color.clear)
 
                     ForEach(appState.issueBreakdown, id: \.0) { kind, count in
-                        Button(action: { appState.filterKind = kind }) {
+                        Button(action: {
+                            appState.publishAfterViewUpdate { appState.filterKind = kind }
+                        }) {
                             Label {
                                 HStack {
                                     Text(kind.rawValue)

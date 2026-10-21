@@ -218,21 +218,88 @@ actor TagService {
     // MARK: - Tool paths
 
     static func ffmpegPath() throws -> String {
-        if let bundled = Bundle.main.path(forResource: "ffmpeg", ofType: nil) { return bundled }
-        for path in ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"] {
-            if FileManager.default.isExecutableFile(atPath: path) { return path }
+        if let cached = ToolPathCache.ffmpeg,
+           FileManager.default.isExecutableFile(atPath: cached) {
+            return cached
+        }
+        let path = try resolveTool(named: "ffmpeg")
+        ToolPathCache.ffmpeg = path
+        return path
+    }
+
+    static func ffprobePath() throws -> String {
+        if let cached = ToolPathCache.ffprobe,
+           FileManager.default.isExecutableFile(atPath: cached) {
+            return cached
+        }
+        // Prefer a real ffprobe; fall back to ffmpeg if needed.
+        if let path = try? resolveTool(named: "ffprobe") {
+            ToolPathCache.ffprobe = path
+            return path
+        }
+        return try ffmpegPath()
+    }
+
+    /// Locates an ffmpeg-family binary: bundled copy, common Homebrew paths,
+    /// then the user's login-shell PATH (so Apple Silicon Homebrew is found).
+    private static func resolveTool(named name: String) throws -> String {
+        var candidates: [String] = []
+
+        if let bundled = Bundle.main.path(forResource: name, ofType: nil) {
+            candidates.append(bundled)
+        }
+        if let fromShell = resolveViaLoginShell(name) {
+            candidates.append(fromShell)
+        }
+        candidates += [
+            "/opt/homebrew/bin/\(name)",
+            "/usr/local/bin/\(name)",
+            "/usr/bin/\(name)",
+        ]
+
+        // Deduplicate while preserving order
+        var seen = Set<String>()
+        for path in candidates where seen.insert(path).inserted {
+            if FileManager.default.isExecutableFile(atPath: path) {
+                return path
+            }
+            // Homebrew symlinks can look non-executable to isExecutableFile
+            // when the target is fine — resolve and re-check.
+            if let resolved = resolveSymlinks(path),
+               resolved != path,
+               FileManager.default.isExecutableFile(atPath: resolved) {
+                return resolved
+            }
         }
         throw TagError.ffmpegNotFound
     }
 
-    static func ffprobePath() throws -> String {
-        // ffprobe ships alongside ffmpeg in the same bin directory
-        if let bundled = Bundle.main.path(forResource: "ffprobe", ofType: nil) { return bundled }
-        for path in ["/opt/homebrew/bin/ffprobe", "/usr/local/bin/ffprobe"] {
-            if FileManager.default.isExecutableFile(atPath: path) { return path }
+    private static func resolveSymlinks(_ path: String) -> String? {
+        let url = URL(fileURLWithPath: path)
+        let resolved = url.resolvingSymlinksInPath().path
+        return FileManager.default.fileExists(atPath: resolved) ? resolved : nil
+    }
+
+    /// Asks the login shell where a tool lives — picks up Homebrew on PATH
+    /// even when the GUI app's environment is minimal.
+    private static func resolveViaLoginShell(_ name: String) -> String? {
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        proc.arguments = ["-lc", "command -v \(name)"]
+        let out = Pipe()
+        proc.standardOutput = out
+        proc.standardError = Pipe()
+        do {
+            try proc.run()
+            proc.waitUntilExit()
+            guard proc.terminationStatus == 0 else { return nil }
+            let path = String(data: out.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let path, !path.isEmpty else { return nil }
+            return path
+        } catch {
+            return nil
         }
-        // If no ffprobe, fall back to ffmpeg with -show_format (same output)
-        return try ffmpegPath()
     }
 
     // MARK: - Metadata helpers
@@ -292,7 +359,7 @@ enum TagError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .ffmpegNotFound:
-            return "ffmpeg not found. Install via Homebrew: brew install ffmpeg"
+            return "ffmpeg not found. Install via Homebrew (`brew install ffmpeg`), then fully quit and relaunch Music Sanitizer so it can see /opt/homebrew/bin/ffmpeg."
         case .ffmpegFailed(let msg):
             return "ffmpeg error: \(msg)"
         case .ffprobeFailed(let msg):

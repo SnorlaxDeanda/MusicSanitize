@@ -8,13 +8,13 @@ struct FileListView: View {
         VStack(spacing: 0) {
             // Toolbar strip
             HStack(spacing: 8) {
-                Toggle("Issues Only", isOn: $appState.filterShowOnlyIssues)
+                Toggle("Issues Only", isOn: appState.filterShowOnlyIssuesBinding)
                     .toggleStyle(.checkbox)
                     .font(.callout)
 
                 Divider().frame(height: 16)
 
-                Picker("Sort", selection: $appState.sortOrder) {
+                Picker("Sort", selection: appState.sortOrderBinding) {
                     ForEach(SortOrder.allCases, id: \.self) { order in
                         Text(order.rawValue).tag(order)
                     }
@@ -54,7 +54,9 @@ struct FileListView: View {
                     }
                 }
             } else {
-                List(appState.filteredFiles, id: \.id, selection: $appState.selectedFileID) { file in
+                // Deferred selection binding — List clears invalid selection
+                // during its own update when `files` is replaced after a scan.
+                List(appState.filteredFiles, id: \.id, selection: appState.selectedFileIDBinding) { file in
                     FileRowView(file: file)
                         .listRowInsets(EdgeInsets(top: 4, leading: 8, bottom: 4, trailing: 8))
                 }
