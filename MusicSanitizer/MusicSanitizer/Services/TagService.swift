@@ -45,26 +45,39 @@ actor TagService {
         let allMeta = id3 + itunes + common
 
         var tags = AudioTags.empty
-        tags.title       = await stringValue(from: allMeta, key: .commonKeyTitle)
-                        ?? await stringValue(from: allMeta, identifier: .iTunesMetadataSongName)
-        tags.artist      = await stringValue(from: allMeta, key: .commonKeyArtist)
-                        ?? await stringValue(from: allMeta, identifier: .iTunesMetadataArtist)
-        tags.albumArtist = await stringValue(from: allMeta, identifier: .iTunesMetadataAlbumArtist)
-                        ?? await stringValue(from: allMeta, id3Key: "TPE2")
-        tags.album       = await stringValue(from: allMeta, key: .commonKeyAlbumName)
-        tags.genre       = await stringValue(from: allMeta, key: .commonKeyType)
-                        ?? await stringValue(from: allMeta, identifier: .iTunesMetadataUserGenre)
-        tags.composer    = await stringValue(from: allMeta, key: .commonKeyCreator)
+        // `??` uses an autoclosure, so async fallbacks must be sequenced — not coalesced.
+        tags.title = await firstStringValue([
+            { await self.stringValue(from: allMeta, key: .commonKeyTitle) },
+            { await self.stringValue(from: allMeta, identifier: .iTunesMetadataSongName) },
+        ])
+        tags.artist = await firstStringValue([
+            { await self.stringValue(from: allMeta, key: .commonKeyArtist) },
+            { await self.stringValue(from: allMeta, identifier: .iTunesMetadataArtist) },
+        ])
+        tags.albumArtist = await firstStringValue([
+            { await self.stringValue(from: allMeta, identifier: .iTunesMetadataAlbumArtist) },
+            { await self.stringValue(from: allMeta, id3Key: "TPE2") },
+        ])
+        tags.album = await stringValue(from: allMeta, key: .commonKeyAlbumName)
+        tags.genre = await firstStringValue([
+            { await self.stringValue(from: allMeta, key: .commonKeyType) },
+            { await self.stringValue(from: allMeta, identifier: .iTunesMetadataUserGenre) },
+        ])
+        tags.composer = await stringValue(from: allMeta, key: .commonKeyCreator)
 
         // Year
-        let yearStr = await stringValue(from: allMeta, id3Key: "TDRC")
-                   ?? await stringValue(from: allMeta, id3Key: "TYER")
-                   ?? await stringValue(from: allMeta, identifier: .iTunesMetadataReleaseDate)
+        let yearStr = await firstStringValue([
+            { await self.stringValue(from: allMeta, id3Key: "TDRC") },
+            { await self.stringValue(from: allMeta, id3Key: "TYER") },
+            { await self.stringValue(from: allMeta, identifier: .iTunesMetadataReleaseDate) },
+        ])
         tags.year = yearStr.flatMap { Int($0.prefix(4)) }
 
         // Track number
-        let trackStr = await stringValue(from: allMeta, id3Key: "TRCK")
-                    ?? await stringValue(from: allMeta, identifier: .iTunesMetadataTrackNumber)
+        let trackStr = await firstStringValue([
+            { await self.stringValue(from: allMeta, id3Key: "TRCK") },
+            { await self.stringValue(from: allMeta, identifier: .iTunesMetadataTrackNumber) },
+        ])
         if let t = trackStr {
             let parts = t.split(separator: "/")
             tags.trackNumber = Int(parts[0].trimmingCharacters(in: .whitespaces))
@@ -385,6 +398,13 @@ actor TagService {
 
     // MARK: - Metadata helpers
 
+    private func firstStringValue(_ loaders: [() async -> String?]) async -> String? {
+        for load in loaders {
+            if let value = await load() { return value }
+        }
+        return nil
+    }
+
     private func stringValue(from items: [AVMetadataItem], key: AVMetadataKey) async -> String? {
         guard let item = items.first(where: { $0.commonKey == key }) else { return nil }
         return cleaned(try? await item.load(.stringValue))
@@ -396,9 +416,10 @@ actor TagService {
     }
 
     private func stringValue(from items: [AVMetadataItem], id3Key: String) async -> String? {
-        if let identifier = AVMetadataItem.identifier(forKey: id3Key as NSString, keySpace: .id3),
-           let value = await stringValue(from: items, identifier: identifier) {
-            return value
+        if let identifier = AVMetadataItem.identifier(forKey: id3Key as NSString, keySpace: .id3) {
+            if let value = await stringValue(from: items, identifier: identifier) {
+                return value
+            }
         }
         guard let item = items.first(where: { ($0.key as? String) == id3Key }) else { return nil }
         return cleaned(try? await item.load(.stringValue))
