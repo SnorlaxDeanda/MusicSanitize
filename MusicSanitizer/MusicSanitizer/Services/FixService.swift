@@ -79,7 +79,7 @@ actor FixService {
             try await tagService.writeTags(tags, to: file.url)
             result.tagsWritten = true
         } catch {
-            result.errors.append("Tag write failed: \(error.localizedDescription)")
+            result.errors.append(Self.annotatedError("Tag write failed", file: file, error: error))
         }
 
         // Strip oversized artwork
@@ -89,7 +89,7 @@ actor FixService {
                 try await tagService.stripArtwork(from: file.url, maxBytes: settings.maxArtworkKB * 1024)
                 result.artworkStripped = true
             } catch {
-                result.errors.append("Artwork strip failed: \(error.localizedDescription)")
+                result.errors.append(Self.annotatedError("Artwork strip failed", file: file, error: error))
             }
         }
 
@@ -233,6 +233,35 @@ actor FixService {
             if counter > 10_000 { break }
         }
         return candidate
+    }
+
+    /// Always include our resolved path so report rows can’t be ambiguous when
+    /// ffmpeg’s stderr mentions a different/confusing path.
+    private static func annotatedError(_ prefix: String, file: AudioFile, error: Error) -> String {
+        let detail = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+        var message = "\(prefix) for \(file.url.path)"
+        if !detail.isEmpty {
+            message += ": \(Self.summarizeFFmpegMessage(detail))"
+        }
+        return message
+    }
+
+    private static func summarizeFFmpegMessage(_ raw: String) -> String {
+        let lower = raw.lowercased()
+        if lower.contains("invalid start code") && lower.contains("riff") {
+            return "File looks corrupt or isn’t a real MP3 (bad RIFF/MP3 header). Re-rip or convert it, then retry."
+        }
+        if lower.contains("invalid data found when processing input") {
+            return "ffmpeg could not read this file (invalid/corrupt audio data)."
+        }
+        // Keep stderr short in the UI — full text is still in Export CSV if needed.
+        let condensed = raw
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+            .suffix(3)
+            .joined(separator: " | ")
+        return condensed.isEmpty ? raw : condensed
     }
 }
 
