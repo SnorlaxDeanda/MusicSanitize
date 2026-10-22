@@ -1,11 +1,30 @@
 import Foundation
 
-// MARK: - Scan & Fix Settings (persisted via UserDefaults)
+// MARK: - Scan & Fix Settings (backup prefs persisted via UserDefaults)
 
 class ScanSettings: ObservableObject {
+    private enum Keys {
+        static let backupEnabled    = "ms.backupEnabled"
+        static let backupFolderName = "ms.backupFolderName"
+        static let backupMode       = "ms.backupMode"
+        static let backupBookmark   = "ms.backupCustomBookmark"
+    }
+
     // File handling
-    @Published var backupEnabled: Bool = true
-    @Published var backupFolderName: String = "_MusicSanitizer_Backup"
+    @Published var backupEnabled: Bool {
+        didSet { UserDefaults.standard.set(backupEnabled, forKey: Keys.backupEnabled) }
+    }
+    @Published var backupFolderName: String {
+        didSet { UserDefaults.standard.set(backupFolderName, forKey: Keys.backupFolderName) }
+    }
+    /// Where to put the backup folder.
+    @Published var backupMode: BackupMode {
+        didSet { UserDefaults.standard.set(backupMode.rawValue, forKey: Keys.backupMode) }
+    }
+    /// Absolute URL chosen by the user when backupMode == .customFolder.
+    @Published var backupCustomURL: URL? {
+        didSet { persistCustomBackupURL(backupCustomURL) }
+    }
 
     // Naming pattern
     @Published var filenamePattern: FilenamePattern = .trackArtistTitle
@@ -41,6 +60,23 @@ class ScanSettings: ObservableObject {
     @Published var processAIFF: Bool = false
     @Published var processWAV: Bool  = false
 
+    init() {
+        let defaults = UserDefaults.standard
+        if defaults.object(forKey: Keys.backupEnabled) == nil {
+            backupEnabled = true
+        } else {
+            backupEnabled = defaults.bool(forKey: Keys.backupEnabled)
+        }
+        backupFolderName = defaults.string(forKey: Keys.backupFolderName) ?? "_MusicSanitizer_Backup"
+        if let raw = defaults.string(forKey: Keys.backupMode),
+           let mode = BackupMode(rawValue: raw) {
+            backupMode = mode
+        } else {
+            backupMode = .insideSourceFolder
+        }
+        backupCustomURL = Self.resolveCustomBackupURL()
+    }
+
     var enabledFormats: [AudioFormat] {
         var formats: [AudioFormat] = []
         if processMP3  { formats.append(.mp3) }
@@ -49,6 +85,73 @@ class ScanSettings: ObservableObject {
         if processAIFF { formats.append(.aiff) }
         if processWAV  { formats.append(.wav) }
         return formats
+    }
+
+    /// Caption for preview/report UI.
+    var backupDestinationDescription: String {
+        guard backupEnabled else { return "Backup disabled" }
+        switch backupMode {
+        case .insideSourceFolder:
+            return "\(backupFolderName)/ inside the music folder"
+        case .customFolder:
+            if let url = backupCustomURL {
+                return "Custom folder: \(url.path)"
+            }
+            return "Custom folder (none chosen yet)"
+        }
+    }
+
+    var isBackupConfigurationValid: Bool {
+        guard backupEnabled else { return true }
+        switch backupMode {
+        case .insideSourceFolder:
+            return !backupFolderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        case .customFolder:
+            return backupCustomURL != nil
+        }
+    }
+
+    private func persistCustomBackupURL(_ url: URL?) {
+        let defaults = UserDefaults.standard
+        guard let url else {
+            defaults.removeObject(forKey: Keys.backupBookmark)
+            return
+        }
+        do {
+            let data = try url.bookmarkData(
+                options: [.withSecurityScope],
+                includingResourceValuesForKeys: nil,
+                relativeTo: nil
+            )
+            defaults.set(data, forKey: Keys.backupBookmark)
+        } catch {
+            // Fall back to plain path string if bookmarking fails (unsigned / no sandbox).
+            defaults.set(url.path, forKey: Keys.backupBookmark)
+        }
+    }
+
+    private static func resolveCustomBackupURL() -> URL? {
+        let defaults = UserDefaults.standard
+        guard let stored = defaults.object(forKey: Keys.backupBookmark) else { return nil }
+
+        if let data = stored as? Data {
+            var isStale = false
+            let url = try? URL(
+                resolvingBookmarkData: data,
+                options: [.withSecurityScope, .withoutUI],
+                relativeTo: nil,
+                bookmarkDataIsStale: &isStale
+            )
+            if let url {
+                _ = url.startAccessingSecurityScopedResource()
+                return url
+            }
+        }
+
+        if let path = stored as? String {
+            return URL(fileURLWithPath: path)
+        }
+        return nil
     }
 }
 
@@ -99,6 +202,15 @@ enum DuplicateMethod: String, CaseIterable, Identifiable {
     case hashOnly         = "File Hash Only"
     case hashAndDuration  = "Hash + Duration"
     case durationAndSize  = "Duration + File Size"
+
+    var id: String { rawValue }
+}
+
+// MARK: - Backup destination mode
+
+enum BackupMode: String, CaseIterable, Identifiable {
+    case insideSourceFolder = "Inside source folder"
+    case customFolder       = "Custom folder…"
 
     var id: String { rawValue }
 }

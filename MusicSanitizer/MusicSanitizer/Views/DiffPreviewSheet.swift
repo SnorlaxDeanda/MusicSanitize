@@ -48,8 +48,11 @@ struct DiffPreviewSheet: View {
 
                 Spacer()
 
-                Text("Originals backed up to \(appState.settings.backupFolderName)/")
+                Text(appState.settings.backupEnabled
+                      ? "Originals backed up to \(appState.settings.backupDestinationDescription)"
+                      : "Backup is disabled")
                     .font(.caption).foregroundStyle(.secondary)
+                    .lineLimit(2)
 
                 Spacer()
 

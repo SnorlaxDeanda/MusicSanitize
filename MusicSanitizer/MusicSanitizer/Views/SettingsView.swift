@@ -18,7 +18,7 @@ struct SettingsView: View {
         }
         .environmentObject(appState)
         .padding(20)
-        .frame(width: 480, height: 420)
+        .frame(width: 520, height: 480)
     }
 }
 
@@ -35,10 +35,7 @@ struct GeneralSettingsTab: View {
                     set: { s.backupEnabled = $0 }
                 ))
                 if s.backupEnabled {
-                    TextField("Backup folder name", text: Binding(
-                        get: { s.backupFolderName },
-                        set: { s.backupFolderName = $0 }
-                    ))
+                    BackupLocationRow(settings: s)
                 }
             }
             Section("Formats to Process") {
@@ -269,5 +266,88 @@ struct WatchFolderSettingsTab: View {
             }
         }
         .formStyle(.grouped)
+    }
+}
+
+// MARK: - Backup location row
+
+struct BackupLocationRow: View {
+    @ObservedObject var settings: ScanSettings
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Picker("Location", selection: $settings.backupMode) {
+                ForEach(BackupMode.allCases) { mode in
+                    Text(mode.rawValue).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            switch settings.backupMode {
+            case .insideSourceFolder:
+                HStack {
+                    Image(systemName: "folder.badge.plus")
+                        .foregroundStyle(.secondary)
+                    TextField("Subfolder name", text: $settings.backupFolderName)
+                        .textFieldStyle(.roundedBorder)
+                }
+                Text("A folder named \"\(settings.backupFolderName)\" will be created inside your music folder.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+            case .customFolder:
+                HStack(spacing: 8) {
+                    Image(systemName: "folder")
+                        .foregroundStyle(.secondary)
+
+                    if let url = settings.backupCustomURL {
+                        Text(url.path)
+                            .font(.callout)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .foregroundStyle(.primary)
+                            .textSelection(.enabled)
+                    } else {
+                        Text("No folder chosen")
+                            .foregroundStyle(.red)
+                    }
+
+                    Spacer(minLength: 4)
+
+                    Button("Choose…") { chooseFolder() }
+                        .controlSize(.small)
+
+                    if settings.backupCustomURL != nil {
+                        Button("Clear") { settings.backupCustomURL = nil }
+                            .controlSize(.small)
+                            .foregroundStyle(.red)
+                    }
+                }
+                .padding(6)
+                .background(Color(nsColor: .controlBackgroundColor))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+
+                Text("Each run creates a time-stamped subfolder (e.g. MusicSanitizer_2026-10-22T02-30-00Z) inside the chosen folder. Apply Fixes will fail until a folder is chosen.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func chooseFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Select Backup Folder"
+        panel.message = "Choose where Music Sanitizer should store backups"
+
+        if let current = settings.backupCustomURL {
+            panel.directoryURL = current
+        }
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        settings.backupCustomURL = url
     }
 }

@@ -110,18 +110,61 @@ actor FixService {
 
     private func createBackup(files: [AudioFile], root: URL) throws -> URL {
         let fm = FileManager.default
-        let backupRoot = root.appendingPathComponent(settings.backupFolderName)
+        let backupRoot = try resolveBackupRoot(sourceRoot: root)
         try fm.createDirectory(at: backupRoot, withIntermediateDirectories: true)
 
         for file in files where file.isSelected {
-            let rel  = file.url.path.replacingOccurrences(of: root.path, with: "")
-            let dest = backupRoot.appendingPathComponent(rel)
+            guard let relative = relativePath(of: file.url, under: root) else {
+                throw BackupError.fileOutsideRoot(file.url)
+            }
+            let dest = urlByAppendingRelativePath(relative, to: backupRoot)
             try fm.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
             if !fm.fileExists(atPath: dest.path) {
                 try fm.copyItem(at: file.url, to: dest)
             }
         }
         return backupRoot
+    }
+
+    private func resolveBackupRoot(sourceRoot: URL) throws -> URL {
+        switch settings.backupMode {
+        case .insideSourceFolder:
+            let name = settings.backupFolderName.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !name.isEmpty else { throw BackupError.invalidFolderName }
+            return sourceRoot.appendingPathComponent(name)
+
+        case .customFolder:
+            guard let custom = settings.backupCustomURL else {
+                throw BackupError.customFolderNotChosen
+            }
+            _ = custom.startAccessingSecurityScopedResource()
+            // Dated subfolder so repeated runs don't overwrite each other.
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime]
+            let stamp = formatter.string(from: Date())
+                .replacingOccurrences(of: ":", with: "-")
+            return custom.appendingPathComponent("MusicSanitizer_\(stamp)")
+        }
+    }
+
+    /// True relative path under `root`, or nil if the file is outside the root.
+    /// Avoids the old `replacingOccurrences` bug that turned
+    /// `/Users/me/MusicLibrary/...` into `Library/...` when root was `.../Music`.
+    private func relativePath(of file: URL, under root: URL) -> String? {
+        let rootPath = root.standardizedFileURL.path
+        let filePath = file.standardizedFileURL.path
+        if filePath == rootPath { return file.lastPathComponent }
+        let prefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
+        guard filePath.hasPrefix(prefix) else { return nil }
+        return String(filePath.dropFirst(prefix.count))
+    }
+
+    /// Appends each path segment separately so a leading `/` or embedded `/`
+    /// cannot collapse into one encoded path component.
+    private func urlByAppendingRelativePath(_ relative: String, to base: URL) -> URL {
+        relative
+            .split(separator: "/", omittingEmptySubsequences: true)
+            .reduce(base) { $0.appendingPathComponent(String($1)) }
     }
 
     // MARK: - File move with directory creation
@@ -221,4 +264,21 @@ struct FileFixResult {
     var artworkFetchAttempted: Bool = false
     var appliedLookup: Bool     = false
     var errors: [String]        = []
+}
+
+enum BackupError: LocalizedError {
+    case customFolderNotChosen
+    case invalidFolderName
+    case fileOutsideRoot(URL)
+
+    var errorDescription: String? {
+        switch self {
+        case .customFolderNotChosen:
+            return "Backup is set to a custom folder, but no folder was chosen. Open Settings → General and pick a backup folder."
+        case .invalidFolderName:
+            return "Backup folder name is empty. Enter a subfolder name in Settings → General."
+        case .fileOutsideRoot(let url):
+            return "Cannot back up file outside the selected music folder: \(url.path)"
+        }
+    }
 }

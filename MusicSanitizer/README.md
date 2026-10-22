@@ -24,7 +24,7 @@ standardising filenames, and organising folder structure.
 - Suggested keeper prefers lossless formats, richer tags, and larger files
 
 ### Safety
-- **Backup before modify** — originals are copied to a `_MusicSanitizer_Backup/` folder
+- **Backup before modify** — originals are copied to `_MusicSanitizer_Backup/` inside the music folder, or to a custom folder you choose in Settings (time-stamped subfolder per run)
 - **Preview before apply** — diff sheet shows every proposed change before anything is touched
 - **CSV/report export** — full log of what was changed
 
