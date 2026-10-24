@@ -156,7 +156,6 @@ class WatchFolderService {
 
         Task {
             let tagService = TagService()
-            let scanService = ScanService(settings: settings)
             var processed = 0
 
             for fileURL in toProcess {
@@ -165,13 +164,8 @@ class WatchFolderService {
 
                 guard let (tags, duration, fileSize) = try? await tagService.readTags(from: fileURL) else { continue }
                 let format = AudioFormat.from(extension: fileURL.pathExtension)
-                var file = AudioFile(url: fileURL, tags: tags, format: format,
+                let file = AudioFile(url: fileURL, tags: tags, format: format,
                                      fileSize: fileSize, duration: duration)
-
-                // Note: ScanService.detectTagIssues etc. are private —
-                // we re-scan using the public scan() entry point for just this file
-                // by passing it as the root with a single-file scan wrapper
-                // (or call the full scan with the parent folder and filter)
 
                 if autoFix {
                     let fixService = FixService(settings: settings)

@@ -79,7 +79,7 @@ actor FixService {
             try await tagService.writeTags(tags, to: file.url)
             result.tagsWritten = true
         } catch {
-            result.errors.append("Tag write failed: \(error.localizedDescription)")
+            result.errors.append(Self.annotatedError("Tag write failed", file: file, error: error))
         }
 
         // Strip oversized artwork
@@ -89,7 +89,7 @@ actor FixService {
                 try await tagService.stripArtwork(from: file.url, maxBytes: settings.maxArtworkKB * 1024)
                 result.artworkStripped = true
             } catch {
-                result.errors.append("Artwork strip failed: \(error.localizedDescription)")
+                result.errors.append(Self.annotatedError("Artwork strip failed", file: file, error: error))
             }
         }
 
@@ -110,12 +110,14 @@ actor FixService {
 
     private func createBackup(files: [AudioFile], root: URL) throws -> URL {
         let fm = FileManager.default
-        let backupRoot = root.appendingPathComponent(settings.backupFolderName)
+        let backupRoot = try resolveBackupRoot(sourceRoot: root)
         try fm.createDirectory(at: backupRoot, withIntermediateDirectories: true)
 
         for file in files where file.isSelected {
-            let rel  = file.url.path.replacingOccurrences(of: root.path, with: "")
-            let dest = backupRoot.appendingPathComponent(rel)
+            guard let relative = relativePath(of: file.url, under: root) else {
+                throw BackupError.fileOutsideRoot(file.url)
+            }
+            let dest = urlByAppendingRelativePath(relative, to: backupRoot)
             try fm.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
             if !fm.fileExists(atPath: dest.path) {
                 try fm.copyItem(at: file.url, to: dest)
@@ -124,34 +126,142 @@ actor FixService {
         return backupRoot
     }
 
+    private func resolveBackupRoot(sourceRoot: URL) throws -> URL {
+        switch settings.backupMode {
+        case .insideSourceFolder:
+            let name = settings.backupFolderName.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !name.isEmpty else { throw BackupError.invalidFolderName }
+            return sourceRoot.appendingPathComponent(name)
+
+        case .customFolder:
+            guard let custom = settings.backupCustomURL else {
+                throw BackupError.customFolderNotChosen
+            }
+            _ = custom.startAccessingSecurityScopedResource()
+            // Dated subfolder so repeated runs don't overwrite each other.
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime]
+            let stamp = formatter.string(from: Date())
+                .replacingOccurrences(of: ":", with: "-")
+            return custom.appendingPathComponent("MusicSanitizer_\(stamp)")
+        }
+    }
+
+    /// True relative path under `root`, or nil if the file is outside the root.
+    /// Avoids the old `replacingOccurrences` bug that turned
+    /// `/Users/me/MusicLibrary/...` into `Library/...` when root was `.../Music`.
+    private func relativePath(of file: URL, under root: URL) -> String? {
+        let rootPath = root.standardizedFileURL.path
+        let filePath = file.standardizedFileURL.path
+        if filePath == rootPath { return file.lastPathComponent }
+        let prefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
+        guard filePath.hasPrefix(prefix) else { return nil }
+        return String(filePath.dropFirst(prefix.count))
+    }
+
+    /// Appends each path segment separately so a leading `/` or embedded `/`
+    /// cannot collapse into one encoded path component.
+    private func urlByAppendingRelativePath(_ relative: String, to base: URL) -> URL {
+        relative
+            .split(separator: "/", omittingEmptySubsequences: true)
+            .reduce(base) { $0.appendingPathComponent(String($1)) }
+    }
+
     // MARK: - File move with directory creation
 
     private func moveFile(from source: URL, to dest: URL, root: URL) throws {
         let fm = FileManager.default
+        let sourcePath = source.standardizedFileURL.path
+        let destPath = dest.standardizedFileURL.path
+
+        // Already at the destination — nothing to do.
+        if sourcePath == destPath { return }
+
         try fm.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
 
-        // If destination exists, add a suffix
-        var finalDest = dest
-        var counter = 1
-        while fm.fileExists(atPath: finalDest.path) {
-            let base = dest.deletingPathExtension().lastPathComponent
-            let ext  = dest.pathExtension
-            finalDest = dest.deletingLastPathComponent()
-                .appendingPathComponent("\(base) (\(counter)).\(ext)")
-            counter += 1
+        // Case-only rename on case-insensitive volumes (APFS default).
+        // `moveItem` reports POSIX 17 / OSStatus -48 (dupFNErr) otherwise.
+        if sourcePath.compare(destPath, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame {
+            try caseOnlyRename(from: source, to: dest)
+            return
         }
 
+        let finalDest = uniqueDestination(for: dest, avoiding: source, fileManager: fm)
         try fm.moveItem(at: source, to: finalDest)
 
         // Remove empty source directories up to root
         var dir = source.deletingLastPathComponent()
-        while dir.path != root.path {
+        while dir.path.hasPrefix(root.path), dir.path != root.path {
             let contents = (try? fm.contentsOfDirectory(atPath: dir.path)) ?? []
             if contents.isEmpty {
                 try? fm.removeItem(at: dir)
+            } else {
+                break
             }
             dir = dir.deletingLastPathComponent()
         }
+    }
+
+    /// Two-step rename so only the casing/diacritics of the leaf name change.
+    private func caseOnlyRename(from source: URL, to dest: URL) throws {
+        let fm = FileManager.default
+        let tmp = source.deletingLastPathComponent()
+            .appendingPathComponent(".__ms_rename_\(UUID().uuidString)_\(source.lastPathComponent)")
+        try fm.moveItem(at: source, to: tmp)
+        do {
+            try fm.moveItem(at: tmp, to: dest)
+        } catch {
+            // Best-effort restore if the second hop fails.
+            try? fm.moveItem(at: tmp, to: source)
+            throw error
+        }
+    }
+
+    /// Picks `dest`, or `name (1).ext`, `name (2).ext`, … while skipping the
+    /// source path itself (needed when only casing differs — already handled).
+    private func uniqueDestination(for dest: URL, avoiding source: URL, fileManager fm: FileManager) -> URL {
+        var candidate = dest
+        var counter = 1
+        let sourcePath = source.standardizedFileURL.path
+        while fm.fileExists(atPath: candidate.path),
+              candidate.standardizedFileURL.path != sourcePath {
+            let base = dest.deletingPathExtension().lastPathComponent
+            let ext = dest.pathExtension
+            let leaf = ext.isEmpty ? "\(base) (\(counter))" : "\(base) (\(counter)).\(ext)"
+            candidate = dest.deletingLastPathComponent().appendingPathComponent(leaf)
+            counter += 1
+            if counter > 10_000 { break }
+        }
+        return candidate
+    }
+
+    /// Always include our resolved path so report rows can’t be ambiguous when
+    /// ffmpeg’s stderr mentions a different/confusing path.
+    private static func annotatedError(_ prefix: String, file: AudioFile, error: Error) -> String {
+        let detail = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+        var message = "\(prefix) for \(file.url.path)"
+        if !detail.isEmpty {
+            message += ": \(Self.summarizeFFmpegMessage(detail))"
+        }
+        return message
+    }
+
+    private static func summarizeFFmpegMessage(_ raw: String) -> String {
+        let lower = raw.lowercased()
+        if lower.contains("invalid start code") && lower.contains("riff") {
+            return "File looks corrupt or isn’t a real MP3 (bad RIFF/MP3 header). Re-rip or convert it, then retry."
+        }
+        if lower.contains("invalid data found when processing input") {
+            return "ffmpeg could not read this file (invalid/corrupt audio data)."
+        }
+        // Keep stderr short in the UI — full text is still in Export CSV if needed.
+        let condensed = raw
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+            .suffix(3)
+            .joined(separator: " | ")
+        return condensed.isEmpty ? raw : condensed
     }
 }
 
@@ -183,4 +293,21 @@ struct FileFixResult {
     var artworkFetchAttempted: Bool = false
     var appliedLookup: Bool     = false
     var errors: [String]        = []
+}
+
+enum BackupError: LocalizedError {
+    case customFolderNotChosen
+    case invalidFolderName
+    case fileOutsideRoot(URL)
+
+    var errorDescription: String? {
+        switch self {
+        case .customFolderNotChosen:
+            return "Backup is set to a custom folder, but no folder was chosen. Open Settings → General and pick a backup folder."
+        case .invalidFolderName:
+            return "Backup folder name is empty. Enter a subfolder name in Settings → General."
+        case .fileOutsideRoot(let url):
+            return "Cannot back up file outside the selected music folder: \(url.path)"
+        }
+    }
 }

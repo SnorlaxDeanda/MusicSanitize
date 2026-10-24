@@ -124,12 +124,20 @@ struct ErrorResultRow: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Image(systemName: "xmark.circle.fill").foregroundStyle(.red)
-                Text(result.file.filename).font(.callout).bold()
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(result.file.filename).font(.callout).bold()
+                    Text(result.file.url.path)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .textSelection(.enabled)
+                        .lineLimit(2)
+                }
             }
-            ForEach(result.errors, id: \.self) { err in
+            ForEach(Array(result.errors.enumerated()), id: \.offset) { _, err in
                 Text("• " + err)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
                     .padding(.leading, 22)
             }
         }

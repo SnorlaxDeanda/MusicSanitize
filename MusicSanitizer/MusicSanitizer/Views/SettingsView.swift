@@ -18,13 +18,14 @@ struct SettingsView: View {
         }
         .environmentObject(appState)
         .padding(20)
-        .frame(width: 480, height: 340)
+        .frame(width: 520, height: 480)
     }
 }
 
 struct GeneralSettingsTab: View {
     @EnvironmentObject var appState: AppState
     var s: ScanSettings { appState.settings }
+    @State private var ffmpegStatus = TagService.ffmpegStatus()
 
     var body: some View {
         Form {
@@ -34,10 +35,7 @@ struct GeneralSettingsTab: View {
                     set: { s.backupEnabled = $0 }
                 ))
                 if s.backupEnabled {
-                    TextField("Backup folder name", text: Binding(
-                        get: { s.backupFolderName },
-                        set: { s.backupFolderName = $0 }
-                    ))
+                    BackupLocationRow(settings: s)
                 }
             }
             Section("Formats to Process") {
@@ -49,8 +47,32 @@ struct GeneralSettingsTab: View {
                     Toggle("WAV",  isOn: Binding(get: { s.processWAV },  set: { s.processWAV  = $0 }))
                 }
             }
+            Section("ffmpeg") {
+                HStack(alignment: .firstTextBaseline) {
+                    Image(systemName: ffmpegStatus.isAvailable ? "checkmark.circle.fill" : "xmark.circle.fill")
+                        .foregroundStyle(ffmpegStatus.isAvailable ? .green : .red)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(ffmpegStatus.isAvailable ? "Found" : "Not found")
+                            .font(.body.weight(.medium))
+                        Text(ffmpegStatus.displayPath)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                        if !ffmpegStatus.isAvailable {
+                            Text("Install with `brew install ffmpeg`, then ⌘Q and relaunch. Apple Silicon path: /opt/homebrew/bin/ffmpeg")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    Spacer()
+                    Button("Recheck") {
+                        ffmpegStatus = TagService.ffmpegStatus()
+                    }
+                }
+            }
         }
         .formStyle(.grouped)
+        .onAppear { ffmpegStatus = TagService.ffmpegStatus() }
     }
 }
 
@@ -173,6 +195,11 @@ struct DuplicatesSettingsTab: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            Section("Removing Duplicates") {
+                Text("After a scan, use Review Duplicates in the toolbar (or Sidebar → Duplicates). Pick the copy to keep in each group; extras are moved to Trash, not permanently deleted.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
     }
@@ -239,5 +266,88 @@ struct WatchFolderSettingsTab: View {
             }
         }
         .formStyle(.grouped)
+    }
+}
+
+// MARK: - Backup location row
+
+struct BackupLocationRow: View {
+    @ObservedObject var settings: ScanSettings
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Picker("Location", selection: $settings.backupMode) {
+                ForEach(BackupMode.allCases) { mode in
+                    Text(mode.rawValue).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            switch settings.backupMode {
+            case .insideSourceFolder:
+                HStack {
+                    Image(systemName: "folder.badge.plus")
+                        .foregroundStyle(.secondary)
+                    TextField("Subfolder name", text: $settings.backupFolderName)
+                        .textFieldStyle(.roundedBorder)
+                }
+                Text("A folder named \"\(settings.backupFolderName)\" will be created inside your music folder.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+            case .customFolder:
+                HStack(spacing: 8) {
+                    Image(systemName: "folder")
+                        .foregroundStyle(.secondary)
+
+                    if let url = settings.backupCustomURL {
+                        Text(url.path)
+                            .font(.callout)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .foregroundStyle(.primary)
+                            .textSelection(.enabled)
+                    } else {
+                        Text("No folder chosen")
+                            .foregroundStyle(.red)
+                    }
+
+                    Spacer(minLength: 4)
+
+                    Button("Choose…") { chooseFolder() }
+                        .controlSize(.small)
+
+                    if settings.backupCustomURL != nil {
+                        Button("Clear") { settings.backupCustomURL = nil }
+                            .controlSize(.small)
+                            .foregroundStyle(.red)
+                    }
+                }
+                .padding(6)
+                .background(Color(nsColor: .controlBackgroundColor))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+
+                Text("Each run creates a time-stamped subfolder (e.g. MusicSanitizer_2026-10-22T02-30-00Z) inside the chosen folder. Apply Fixes will fail until a folder is chosen.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func chooseFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Select Backup Folder"
+        panel.message = "Choose where Music Sanitizer should store backups"
+
+        if let current = settings.backupCustomURL {
+            panel.directoryURL = current
+        }
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        settings.backupCustomURL = url
     }
 }

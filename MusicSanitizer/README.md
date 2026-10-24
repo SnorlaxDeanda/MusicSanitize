@@ -17,12 +17,14 @@ standardising filenames, and organising folder structure.
 - Organises files into `Artist/Album` or `Artist/Year - Album` hierarchy
 - Optional title-casing and underscore replacement
 
-### Duplicate Detection
+### Duplicate Detection & Removal
 - Three methods: file hash, hash + duration, or duration + file size
-- Groups duplicates visually for manual review
+- **Review Duplicates** toolbar action (also in the sidebar) groups matches
+- Pick one keeper per group; extras are moved to **Trash** (recoverable)
+- Suggested keeper prefers lossless formats, richer tags, and larger files
 
 ### Safety
-- **Backup before modify** — originals are copied to a `_MusicSanitizer_Backup/` folder
+- **Backup before modify** — originals are copied to `_MusicSanitizer_Backup/` inside the music folder, or to a custom folder you choose in Settings (time-stamped subfolder per run)
 - **Preview before apply** — diff sheet shows every proposed change before anything is touched
 - **CSV/report export** — full log of what was changed
 
@@ -40,8 +42,19 @@ standardising filenames, and organising folder structure.
   ```
   brew install ffmpeg
   ```
-  The app will detect ffmpeg at `/usr/local/bin/ffmpeg` or `/opt/homebrew/bin/ffmpeg`,
-  or you can bundle a static build inside the app's Resources folder.
+  On Apple Silicon, Homebrew installs to `/opt/homebrew/bin/ffmpeg`. Confirm with:
+  ```
+  which ffmpeg
+  ls -l /opt/homebrew/bin/ffmpeg
+  ```
+  The app resolves ffmpeg via (in order) a bundled copy in Resources, your login
+  shell `PATH` / `brew --prefix`, then `/opt/homebrew/bin`, `/usr/local/bin`,
+  and MacPorts. Settings → General shows the path it found.
+
+  **App Sandbox is disabled** so the process can execute Homebrew’s ffmpeg.
+  A sandboxed build reports “ffmpeg not found” even when `brew install ffmpeg`
+  says it’s already installed. After pulling this change: ⌘Q the app,
+  Product → Clean Build Folder, then ⌘R.
 
 ## Building
 
@@ -71,6 +84,7 @@ MusicSanitizer/
     ├── FileListView.swift      # File table with checkboxes and issue badges
     ├── FileDetailView.swift    # Tag grid, issue list, proposed path diff
     ├── DiffPreviewSheet.swift  # Git-diff-style change preview before applying
+    ├── DuplicateReviewSheet.swift # Keep-one / trash extras for duplicate groups
     ├── ReportSheet.swift       # Post-fix summary with error log
     └── SettingsView.swift      # All settings tabs including Watch Folder
 ```

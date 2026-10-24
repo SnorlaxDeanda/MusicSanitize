@@ -45,26 +45,39 @@ actor TagService {
         let allMeta = id3 + itunes + common
 
         var tags = AudioTags.empty
-        tags.title       = stringValue(from: allMeta, key: .commonKeyTitle)
-                        ?? stringValue(from: allMeta, identifier: .iTunesMetadataSongName)
-        tags.artist      = stringValue(from: allMeta, key: .commonKeyArtist)
-                        ?? stringValue(from: allMeta, identifier: .iTunesMetadataArtist)
-        tags.albumArtist = stringValue(from: allMeta, identifier: .iTunesMetadataAlbumArtist)
-                        ?? stringValue(from: allMeta, id3Key: "TPE2")
-        tags.album       = stringValue(from: allMeta, key: .commonKeyAlbumName)
-        tags.genre       = stringValue(from: allMeta, key: .commonKeyType)
-                        ?? stringValue(from: allMeta, identifier: .iTunesMetadataUserGenre)
-        tags.composer    = stringValue(from: allMeta, key: .commonKeyCreator)
+        // `??` uses an autoclosure, so async fallbacks must be sequenced — not coalesced.
+        tags.title = await firstStringValue([
+            { await self.stringValue(from: allMeta, key: .commonKeyTitle) },
+            { await self.stringValue(from: allMeta, identifier: .iTunesMetadataSongName) },
+        ])
+        tags.artist = await firstStringValue([
+            { await self.stringValue(from: allMeta, key: .commonKeyArtist) },
+            { await self.stringValue(from: allMeta, identifier: .iTunesMetadataArtist) },
+        ])
+        tags.albumArtist = await firstStringValue([
+            { await self.stringValue(from: allMeta, identifier: .iTunesMetadataAlbumArtist) },
+            { await self.stringValue(from: allMeta, id3Key: "TPE2") },
+        ])
+        tags.album = await stringValue(from: allMeta, key: .commonKeyAlbumName)
+        tags.genre = await firstStringValue([
+            { await self.stringValue(from: allMeta, key: .commonKeyType) },
+            { await self.stringValue(from: allMeta, identifier: .iTunesMetadataUserGenre) },
+        ])
+        tags.composer = await stringValue(from: allMeta, key: .commonKeyCreator)
 
         // Year
-        let yearStr = stringValue(from: allMeta, id3Key: "TDRC")
-                   ?? stringValue(from: allMeta, id3Key: "TYER")
-                   ?? stringValue(from: allMeta, identifier: .iTunesMetadataReleaseDate)
+        let yearStr = await firstStringValue([
+            { await self.stringValue(from: allMeta, id3Key: "TDRC") },
+            { await self.stringValue(from: allMeta, id3Key: "TYER") },
+            { await self.stringValue(from: allMeta, identifier: .iTunesMetadataReleaseDate) },
+        ])
         tags.year = yearStr.flatMap { Int($0.prefix(4)) }
 
         // Track number
-        let trackStr = stringValue(from: allMeta, id3Key: "TRCK")
-                    ?? stringValue(from: allMeta, identifier: .iTunesMetadataTrackNumber)
+        let trackStr = await firstStringValue([
+            { await self.stringValue(from: allMeta, id3Key: "TRCK") },
+            { await self.stringValue(from: allMeta, identifier: .iTunesMetadataTrackNumber) },
+        ])
         if let t = trackStr {
             let parts = t.split(separator: "/")
             tags.trackNumber = Int(parts[0].trimmingCharacters(in: .whitespaces))
@@ -188,10 +201,7 @@ actor TagService {
         let result = try await runProcess(ffmpeg, args: args)
         if result.exitCode != 0 { throw TagError.ffmpegFailed(result.stderr) }
 
-        try FileManager.default.replaceItem(at: url, withItemAt: tmp,
-                                            backupItemName: nil,
-                                            options: .usingNewMetadataOnly,
-                                            resultingItemURL: nil)
+        try Self.atomicallyReplace(url, with: tmp)
     }
 
     // MARK: - Strip oversized artwork
@@ -209,30 +219,216 @@ actor TagService {
         let result = try await runProcess(ffmpeg, args: args)
         if result.exitCode != 0 { throw TagError.ffmpegFailed(result.stderr) }
 
-        try FileManager.default.replaceItem(at: url, withItemAt: tmp,
-                                            backupItemName: nil,
-                                            options: .usingNewMetadataOnly,
-                                            resultingItemURL: nil)
+        try Self.atomicallyReplace(url, with: tmp)
+    }
+
+    /// Replaces `original` with `newFile`, falling back when `replaceItem`
+    /// hits POSIX EEXIST / OSStatus -48 (dupFNErr) on some volumes.
+    nonisolated private static func atomicallyReplace(_ original: URL, with newFile: URL) throws {
+        let fm = FileManager.default
+        do {
+            _ = try fm.replaceItemAt(
+                original,
+                withItemAt: newFile,
+                backupItemName: nil,
+                options: [.usingNewMetadataOnly]
+            )
+            return
+        } catch {
+            // Fall through to a two-step swap.
+        }
+
+        let backup = original.deletingLastPathComponent()
+            .appendingPathComponent(".__ms_bak_\(UUID().uuidString)_\(original.lastPathComponent)")
+        try fm.moveItem(at: original, to: backup)
+        do {
+            try fm.moveItem(at: newFile, to: original)
+            try? fm.removeItem(at: backup)
+        } catch {
+            try? fm.moveItem(at: backup, to: original)
+            throw error
+        }
     }
 
     // MARK: - Tool paths
 
-    static func ffmpegPath() throws -> String {
-        if let bundled = Bundle.main.path(forResource: "ffmpeg", ofType: nil) { return bundled }
-        for path in ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"] {
-            if FileManager.default.isExecutableFile(atPath: path) { return path }
+    /// Snapshot for Settings / diagnostics (never throws).
+    nonisolated static func ffmpegStatus() -> FFmpegStatus {
+        do {
+            let path = try ffmpegPath()
+            return .found(path)
+        } catch {
+            return .missing
+        }
+    }
+
+    nonisolated static func ffmpegPath() throws -> String {
+        if let cached = ToolPathCache.ffmpeg, isUsableTool(at: cached) {
+            return cached
+        }
+        let path = try resolveTool(named: "ffmpeg")
+        ToolPathCache.ffmpeg = path
+        return path
+    }
+
+    nonisolated static func ffprobePath() throws -> String {
+        if let cached = ToolPathCache.ffprobe, isUsableTool(at: cached) {
+            return cached
+        }
+        // Prefer a real ffprobe; fall back to ffmpeg if needed.
+        if let path = try? resolveTool(named: "ffprobe") {
+            ToolPathCache.ffprobe = path
+            return path
+        }
+        return try ffmpegPath()
+    }
+
+    /// Locates an ffmpeg-family binary: bundled copy, login-shell / brew
+    /// prefix, then well-known Homebrew paths on Apple Silicon and Intel.
+    nonisolated private static func resolveTool(named name: String) throws -> String {
+        var candidates: [String] = []
+
+        if let bundled = Bundle.main.path(forResource: name, ofType: nil) {
+            candidates.append(bundled)
+        }
+        if let fromShell = resolveViaLoginShell(name) {
+            candidates.append(fromShell)
+        }
+        if let brewPrefix = resolveBrewPrefix() {
+            candidates.append("\(brewPrefix)/bin/\(name)")
+        }
+        candidates += [
+            "/opt/homebrew/bin/\(name)",           // Apple Silicon Homebrew
+            "/usr/local/bin/\(name)",              // Intel Homebrew
+            "/opt/local/bin/\(name)",              // MacPorts
+            "\(NSHomeDirectory())/homebrew/bin/\(name)",
+            "/usr/bin/\(name)",
+        ]
+
+        // Deduplicate while preserving order
+        var seen = Set<String>()
+        for path in candidates where seen.insert(path).inserted {
+            if let usable = usableToolPath(path) {
+                return usable
+            }
         }
         throw TagError.ffmpegNotFound
     }
 
-    static func ffprobePath() throws -> String {
-        // ffprobe ships alongside ffmpeg in the same bin directory
-        if let bundled = Bundle.main.path(forResource: "ffprobe", ofType: nil) { return bundled }
-        for path in ["/opt/homebrew/bin/ffprobe", "/usr/local/bin/ffprobe"] {
-            if FileManager.default.isExecutableFile(atPath: path) { return path }
+    /// Returns a path we can hand to `Process` (resolving Homebrew symlinks).
+    nonisolated private static func usableToolPath(_ path: String) -> String? {
+        if isUsableTool(at: path) { return path }
+        if let resolved = resolveSymlinks(path), resolved != path, isUsableTool(at: resolved) {
+            return resolved
         }
-        // If no ffprobe, fall back to ffmpeg with -show_format (same output)
-        return try ffmpegPath()
+        return nil
+    }
+
+    nonisolated private static func isUsableTool(at path: String) -> Bool {
+        let fm = FileManager.default
+        var isDirectory: ObjCBool = false
+        guard fm.fileExists(atPath: path, isDirectory: &isDirectory),
+              !isDirectory.boolValue else {
+            return false
+        }
+        // Prefer the executable bit, but Homebrew cellars / sandbox edge cases
+        // sometimes make isExecutableFile return false for a real binary.
+        if fm.isExecutableFile(atPath: path) { return true }
+        return fm.isReadableFile(atPath: path)
+    }
+
+    nonisolated private static func resolveSymlinks(_ path: String) -> String? {
+        let url = URL(fileURLWithPath: path)
+        let resolved = url.resolvingSymlinksInPath().path
+        return FileManager.default.fileExists(atPath: resolved) ? resolved : nil
+    }
+
+    /// Asks the login shell where a tool lives — picks up Homebrew on PATH
+    /// even when the GUI app's environment is minimal.
+    nonisolated private static func resolveViaLoginShell(_ name: String) -> String? {
+        // Only ever called with fixed literals ("ffmpeg" / "ffprobe").
+        let safeName = name.replacingOccurrences(of: "[^A-Za-z0-9_-]", with: "", options: .regularExpression)
+        guard safeName == name, !name.isEmpty else { return nil }
+
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        // Prepend Homebrew prefixes so GUI-launched apps still find brew tools.
+        proc.arguments = [
+            "-lc",
+            "export PATH=\"/opt/homebrew/bin:/usr/local/bin:/opt/local/bin:$PATH\"; command -v \(safeName)",
+        ]
+        let out = Pipe()
+        proc.standardOutput = out
+        proc.standardError = Pipe()
+        do {
+            try proc.run()
+            proc.waitUntilExit()
+            guard proc.terminationStatus == 0 else { return nil }
+            let path = String(data: out.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let path, !path.isEmpty, path.hasPrefix("/") else { return nil }
+            return path
+        } catch {
+            return nil
+        }
+    }
+
+    nonisolated private static func resolveBrewPrefix() -> String? {
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        proc.arguments = [
+            "-lc",
+            "export PATH=\"/opt/homebrew/bin:/usr/local/bin:$PATH\"; brew --prefix 2>/dev/null",
+        ]
+        let out = Pipe()
+        proc.standardOutput = out
+        proc.standardError = Pipe()
+        do {
+            try proc.run()
+            proc.waitUntilExit()
+            guard proc.terminationStatus == 0 else { return nil }
+            let prefix = String(data: out.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let prefix, !prefix.isEmpty, prefix.hasPrefix("/") else { return nil }
+            return prefix
+        } catch {
+            return nil
+        }
+    }
+
+    // MARK: - Metadata helpers
+
+    private func firstStringValue(_ loaders: [() async -> String?]) async -> String? {
+        for load in loaders {
+            if let value = await load() { return value }
+        }
+        return nil
+    }
+
+    private func stringValue(from items: [AVMetadataItem], key: AVMetadataKey) async -> String? {
+        guard let item = items.first(where: { $0.commonKey == key }) else { return nil }
+        return cleaned(try? await item.load(.stringValue))
+    }
+
+    private func stringValue(from items: [AVMetadataItem], identifier: AVMetadataIdentifier) async -> String? {
+        guard let item = items.first(where: { $0.identifier == identifier }) else { return nil }
+        return cleaned(try? await item.load(.stringValue))
+    }
+
+    private func stringValue(from items: [AVMetadataItem], id3Key: String) async -> String? {
+        if let identifier = AVMetadataItem.identifier(forKey: id3Key as NSString, keySpace: .id3) {
+            if let value = await stringValue(from: items, identifier: identifier) {
+                return value
+            }
+        }
+        guard let item = items.first(where: { ($0.key as? String) == id3Key }) else { return nil }
+        return cleaned(try? await item.load(.stringValue))
+    }
+
+    private func cleaned(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     // MARK: - Process runner
@@ -242,6 +438,16 @@ actor TagService {
             let proc = Process()
             proc.executableURL = URL(fileURLWithPath: path)
             proc.arguments = args
+            // GUI apps inherit a minimal PATH; Homebrew ffmpeg may call
+            // sibling tools, so keep brew prefixes available.
+            var env = ProcessInfo.processInfo.environment
+            let brewPath = "/opt/homebrew/bin:/usr/local/bin:/opt/local/bin"
+            if let existing = env["PATH"], !existing.isEmpty {
+                env["PATH"] = "\(brewPath):\(existing)"
+            } else {
+                env["PATH"] = "\(brewPath):/usr/bin:/bin"
+            }
+            proc.environment = env
             let outPipe = Pipe()
             let errPipe = Pipe()
             proc.standardOutput = outPipe
@@ -257,6 +463,57 @@ actor TagService {
     }
 }
 
+// MARK: - Tool path cache / status
+
+private enum ToolPathCache {
+    private static let lock = NSLock()
+    private static var _ffmpeg: String?
+    private static var _ffprobe: String?
+
+    static var ffmpeg: String? {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return _ffmpeg
+        }
+        set {
+            lock.lock()
+            defer { lock.unlock() }
+            _ffmpeg = newValue
+        }
+    }
+
+    static var ffprobe: String? {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return _ffprobe
+        }
+        set {
+            lock.lock()
+            defer { lock.unlock() }
+            _ffprobe = newValue
+        }
+    }
+}
+
+enum FFmpegStatus: Equatable {
+    case found(String)
+    case missing
+
+    var isAvailable: Bool {
+        if case .found = self { return true }
+        return false
+    }
+
+    var displayPath: String {
+        switch self {
+        case .found(let path): return path
+        case .missing: return "Not found"
+        }
+    }
+}
+
 // MARK: - Errors
 
 enum TagError: LocalizedError {
@@ -268,7 +525,12 @@ enum TagError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .ffmpegNotFound:
-            return "ffmpeg not found. Install via Homebrew: brew install ffmpeg"
+            return """
+            ffmpeg not found. Terminal can see Homebrew installs that a sandboxed \
+            build cannot. In this build App Sandbox is off — fully quit Music Sanitizer \
+            (⌘Q), clean build in Xcode (Product → Clean Build Folder), run again, and \
+            confirm `ls /opt/homebrew/bin/ffmpeg` works in Terminal.
+            """
         case .ffmpegFailed(let msg):
             return "ffmpeg error: \(msg)"
         case .ffprobeFailed(let msg):
@@ -278,3 +540,4 @@ enum TagError: LocalizedError {
         }
     }
 }
+

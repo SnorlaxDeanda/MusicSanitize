@@ -17,7 +17,9 @@ struct SidebarView: View {
             // Issue filter
             if !appState.issueBreakdown.isEmpty {
                 Section("Filter by Issue") {
-                    Button(action: { appState.filterKind = nil }) {
+                    Button(action: {
+                        appState.publishAfterViewUpdate { appState.filterKind = nil }
+                    }) {
                         Label {
                             HStack {
                                 Text("All Files")
@@ -34,7 +36,9 @@ struct SidebarView: View {
                     .listRowBackground(appState.filterKind == nil ? Color.accentColor.opacity(0.15) : Color.clear)
 
                     ForEach(appState.issueBreakdown, id: \.0) { kind, count in
-                        Button(action: { appState.filterKind = kind }) {
+                        Button(action: {
+                            appState.publishAfterViewUpdate { appState.filterKind = kind }
+                        }) {
                             Label {
                                 HStack {
                                     Text(kind.rawValue)
@@ -64,6 +68,30 @@ struct SidebarView: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(Color.accentColor)
+            }
+
+            if !appState.duplicateGroups.isEmpty {
+                Section("Duplicates") {
+                    Button {
+                        appState.publishAfterViewUpdate {
+                            appState.showDuplicateSheet = true
+                        }
+                    } label: {
+                        Label {
+                            HStack {
+                                Text("Review & Delete…")
+                                Spacer()
+                                Text("\(appState.duplicateGroups.count)")
+                                    .foregroundStyle(.secondary)
+                                    .font(.caption)
+                            }
+                        } icon: {
+                            Image(systemName: "trash")
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color.accentColor)
+                }
             }
         }
         .listStyle(.sidebar)

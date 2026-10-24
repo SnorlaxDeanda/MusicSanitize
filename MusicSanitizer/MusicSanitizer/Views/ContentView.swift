@@ -49,6 +49,11 @@ struct ContentView: View {
                     }
                     .disabled(appState.files.isEmpty || !appState.files.contains { $0.hasIssues })
 
+                    Button(action: { appState.showDuplicateSheet = true }) {
+                        Label("Review Duplicates", systemImage: "doc.on.doc")
+                    }
+                    .disabled(appState.duplicateGroups.isEmpty)
+
                     Button(action: { Task { await appState.applyFixes() } }) {
                         Label("Apply Fixes", systemImage: "checkmark.circle.fill")
                     }
@@ -57,21 +62,27 @@ struct ContentView: View {
                 }
             }
         }
-        .sheet(isPresented: $appState.showDiffSheet) {
+        .sheet(isPresented: appState.showDiffSheetBinding) {
             DiffPreviewSheet()
                 .environmentObject(appState)
                 .frame(minWidth: 700, minHeight: 500)
         }
-        .sheet(isPresented: $appState.showReportSheet) {
+        .sheet(isPresented: appState.showReportSheetBinding) {
             ReportSheet()
                 .environmentObject(appState)
                 .frame(minWidth: 500, minHeight: 400)
         }
-        .alert("Error", isPresented: Binding(
-            get: { appState.errorMessage != nil },
-            set: { if !$0 { appState.errorMessage = nil } }
-        )) {
-            Button("OK") { appState.errorMessage = nil }
+        .sheet(isPresented: appState.showDuplicateSheetBinding) {
+            DuplicateReviewSheet()
+                .environmentObject(appState)
+                .frame(minWidth: 720, minHeight: 520)
+        }
+        .alert("Error", isPresented: appState.errorAlertBinding) {
+            Button("OK") {
+                appState.publishAfterViewUpdate {
+                    appState.errorMessage = nil
+                }
+            }
         } message: {
             Text(appState.errorMessage ?? "")
         }
