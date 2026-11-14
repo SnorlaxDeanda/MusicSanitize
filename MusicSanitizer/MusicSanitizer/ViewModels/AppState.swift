@@ -172,7 +172,7 @@ class AppState: ObservableObject {
 
         isScanning = true
         scanProgress = 0
-        scanStatus = "Starting…"
+        scanStatus = "Listing audio files…"
         selectedFileID = nil
         errorMessage = nil
         files = []
@@ -242,7 +242,7 @@ class AppState: ObservableObject {
 
         isApplying = true
         scanProgress = 0
-        scanStatus = "Starting…"
+        scanStatus = "Preparing…"
         errorMessage = nil
 
         let service = FixService(settings: settings)
@@ -264,9 +264,17 @@ class AppState: ObservableObject {
             publishAfterViewUpdate {
                 self.showReportSheet = true
             }
+            // Clear applying state before rescan so the toolbar doesn't sit on
+            // a stale "Starting…/Preparing…" label from the fix pass.
+            isApplying = false
+            scanStatus = "Refreshing library…"
             await scan()
         } catch {
             errorMessage = error.localizedDescription
+            isApplying = false
+            scanStatus = ""
+            scanProgress = 0
+            return
         }
 
         await Task.yield()

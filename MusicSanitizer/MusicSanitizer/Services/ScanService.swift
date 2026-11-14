@@ -15,12 +15,18 @@ actor ScanService {
     // MARK: - Main scan entry point
 
     func scan(root: URL, progressHandler: @Sendable @escaping (Double, String) -> Void) async throws -> [AudioFile] {
-        let urls = try collectAudioFiles(under: root)
+        progressHandler(0.01, "Listing audio files…")
+        let urls = try collectAudioFiles(under: root) { count in
+            // Keep the UI alive during large-folder walks (previously stayed on "Starting…").
+            if count == 0 || count % 50 == 0 {
+                progressHandler(0.02, "Listing audio files… \(count)")
+            }
+        }
         var files: [AudioFile] = []
-        let total = Double(urls.count)
+        let total = Double(max(urls.count, 1))
 
         for (i, url) in urls.enumerated() {
-            progressHandler(Double(i) / total, url.lastPathComponent)
+            progressHandler(0.05 + 0.80 * (Double(i) / total), url.lastPathComponent)
             if let file = try? await buildAudioFile(url: url, root: root) {
                 files.append(file)
             }
@@ -40,7 +46,10 @@ actor ScanService {
 
     // MARK: - File discovery
 
-    private func collectAudioFiles(under root: URL) throws -> [URL] {
+    private func collectAudioFiles(
+        under root: URL,
+        progress: ((Int) -> Void)? = nil
+    ) throws -> [URL] {
         let fm = FileManager.default
         var results: [URL] = []
 
@@ -56,6 +65,7 @@ actor ScanService {
             guard vals?.isRegularFile == true else { continue }
             if ext.contains(url.pathExtension.lowercased()) {
                 results.append(url)
+                progress?(results.count)
             }
         }
         return results.sorted { $0.path < $1.path }
@@ -84,8 +94,14 @@ actor ScanService {
     private func detectTagIssues(_ file: inout AudioFile) {
         let t = file.tags
         if t.title?.trimmingCharacters(in: .whitespaces).isEmpty ?? true {
-            file.issues.append(FileIssue(kind: .missingTitle, description: "Title tag is empty",
-                                         severity: .warning, autoFix: settings.lookupMetadata))
+            let inferred = Self.inferredTitle(fromFilename: file.url.deletingPathExtension().lastPathComponent)
+            file.issues.append(FileIssue(
+                kind: .missingTitle,
+                description: "Title tag is empty",
+                severity: .warning,
+                autoFix: settings.fixMissingTitles || settings.lookupMetadata,
+                proposedFix: inferred
+            ))
         }
         if t.artist?.trimmingCharacters(in: .whitespaces).isEmpty ?? true {
             file.issues.append(FileIssue(kind: .missingArtist, description: "Artist tag is empty",
@@ -454,6 +470,28 @@ actor ScanService {
 
         let digest = hasher.finalize()
         return digest.map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Best-effort title from a filename like `01 - Artist - Title` or `01 - Title`.
+    nonisolated static func inferredTitle(fromFilename name: String) -> String? {
+        var remainder = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !remainder.isEmpty else { return nil }
+
+        if let match = remainder.range(
+            of: #"^\d{1,3}\s*[-._)\]]\s*"#,
+            options: .regularExpression
+        ) {
+            remainder = String(remainder[match.upperBound...])
+        }
+
+        let parts = remainder
+            .components(separatedBy: " - ")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        let title = parts.count >= 2 ? parts.last! : (parts.first ?? remainder)
+        let cleaned = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        return cleaned.isEmpty ? nil : cleaned
     }
 
     // MARK: - Filename sanitization helper

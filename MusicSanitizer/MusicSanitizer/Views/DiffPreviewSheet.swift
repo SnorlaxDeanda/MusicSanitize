@@ -60,7 +60,13 @@ struct DiffPreviewSheet: View {
 
                 Button("Apply \(filesWithIssues.count) Files") {
                     dismiss()
-                    Task { await appState.applyFixes() }
+                    // Wait for the sheet dismiss / layout pass to finish before
+                    // flipping isApplying — avoids layout recursion stalls that
+                    // left the toolbar stuck on "Starting…".
+                    Task {
+                        try? await Task.sleep(nanoseconds: 150_000_000)
+                        await appState.applyFixes()
+                    }
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(filesWithIssues.isEmpty)

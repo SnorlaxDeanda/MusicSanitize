@@ -283,19 +283,15 @@ actor TagService {
         return try ffmpegPath()
     }
 
-    /// Locates an ffmpeg-family binary: bundled copy, login-shell / brew
-    /// prefix, then well-known Homebrew paths on Apple Silicon and Intel.
+    /// Locates an ffmpeg-family binary: bundled copy and well-known Homebrew
+    /// paths first (fast, no subprocess), then login-shell / brew as fallback.
+    /// Shell probes used to run *before* known paths and could hang forever on
+    /// a blocking `.zshrc`, leaving Apply Fixes stuck at "Starting…".
     nonisolated private static func resolveTool(named name: String) throws -> String {
         var candidates: [String] = []
 
         if let bundled = Bundle.main.path(forResource: name, ofType: nil) {
             candidates.append(bundled)
-        }
-        if let fromShell = resolveViaLoginShell(name) {
-            candidates.append(fromShell)
-        }
-        if let brewPrefix = resolveBrewPrefix() {
-            candidates.append("\(brewPrefix)/bin/\(name)")
         }
         candidates += [
             "/opt/homebrew/bin/\(name)",           // Apple Silicon Homebrew
@@ -304,6 +300,13 @@ actor TagService {
             "\(NSHomeDirectory())/homebrew/bin/\(name)",
             "/usr/bin/\(name)",
         ]
+        // Slow / potentially-blocking probes last.
+        if let brewPrefix = resolveBrewPrefix() {
+            candidates.append("\(brewPrefix)/bin/\(name)")
+        }
+        if let fromShell = resolveViaLoginShell(name) {
+            candidates.append(fromShell)
+        }
 
         // Deduplicate while preserving order
         var seen = Set<String>()
@@ -350,50 +353,50 @@ actor TagService {
         let safeName = name.replacingOccurrences(of: "[^A-Za-z0-9_-]", with: "", options: .regularExpression)
         guard safeName == name, !name.isEmpty else { return nil }
 
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        // Prepend Homebrew prefixes so GUI-launched apps still find brew tools.
-        proc.arguments = [
-            "-lc",
-            "export PATH=\"/opt/homebrew/bin:/usr/local/bin:/opt/local/bin:$PATH\"; command -v \(safeName)",
-        ]
-        let out = Pipe()
-        proc.standardOutput = out
-        proc.standardError = Pipe()
-        do {
-            try proc.run()
-            proc.waitUntilExit()
-            guard proc.terminationStatus == 0 else { return nil }
-            let path = String(data: out.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            guard let path, !path.isEmpty, path.hasPrefix("/") else { return nil }
-            return path
-        } catch {
-            return nil
-        }
+        return runTimedShell(
+            "export PATH=\"/opt/homebrew/bin:/usr/local/bin:/opt/local/bin:$PATH\"; command -v \(safeName)"
+        )
     }
 
     nonisolated private static func resolveBrewPrefix() -> String? {
+        runTimedShell(
+            "export PATH=\"/opt/homebrew/bin:/usr/local/bin:$PATH\"; brew --prefix 2>/dev/null"
+        )
+    }
+
+    /// Runs a short login-shell probe with a hard timeout so a blocking
+    /// `.zshrc` cannot freeze Apply Fixes / Scan forever.
+    nonisolated private static func runTimedShell(_ command: String, timeoutSeconds: Double = 3.0) -> String? {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        proc.arguments = [
-            "-lc",
-            "export PATH=\"/opt/homebrew/bin:/usr/local/bin:$PATH\"; brew --prefix 2>/dev/null",
-        ]
+        // `-f` skips user rc files (fast + non-blocking). PATH is set explicitly.
+        proc.arguments = ["-f", "-c", command]
         let out = Pipe()
         proc.standardOutput = out
         proc.standardError = Pipe()
         do {
             try proc.run()
-            proc.waitUntilExit()
-            guard proc.terminationStatus == 0 else { return nil }
-            let prefix = String(data: out.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            guard let prefix, !prefix.isEmpty, prefix.hasPrefix("/") else { return nil }
-            return prefix
         } catch {
             return nil
         }
+
+        let deadline = Date().addingTimeInterval(timeoutSeconds)
+        while proc.isRunning, Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        if proc.isRunning {
+            proc.terminate()
+            // Give it a moment, then force-kill if needed.
+            Thread.sleep(forTimeInterval: 0.2)
+            if proc.isRunning { proc.interrupt() }
+            return nil
+        }
+
+        guard proc.terminationStatus == 0 else { return nil }
+        let path = String(data: out.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let path, !path.isEmpty, path.hasPrefix("/") else { return nil }
+        return path
     }
 
     // MARK: - Metadata helpers

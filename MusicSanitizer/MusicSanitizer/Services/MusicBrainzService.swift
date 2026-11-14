@@ -28,7 +28,7 @@ actor MusicBrainzService {
 
         guard let url = URL(string: urlStr) else { return nil }
 
-        var request = URLRequest(url: url)
+        var request = URLRequest(url: url, timeoutInterval: 12)
         request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
 
         do {
@@ -46,7 +46,7 @@ actor MusicBrainzService {
         let urlStr = "https://coverartarchive.org/release/\(mbid)/front-500"
         guard let url = URL(string: urlStr) else { return nil }
 
-        var request = URLRequest(url: url)
+        var request = URLRequest(url: url, timeoutInterval: 12)
         request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
 
         return try? await URLSession.shared.data(for: request).0
