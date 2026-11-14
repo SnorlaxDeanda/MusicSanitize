@@ -26,11 +26,16 @@ actor ScanService {
             }
         }
 
-        progressHandler(0.9, "Detecting duplicates…")
-        let withDupes = detectDuplicates(in: files)
+        progressHandler(0.88, "Detecting duplicates…")
+        var result = detectDuplicates(in: files)
+
+        if settings.mergeSplitAlbums {
+            progressHandler(0.94, "Looking for split albums…")
+            result = detectSplitAlbums(in: result, root: root)
+        }
 
         progressHandler(1.0, "Done")
-        return withDupes
+        return result
     }
 
     // MARK: - File discovery
@@ -234,6 +239,193 @@ actor ScanService {
             ))
         }
         return result
+    }
+
+    // MARK: - Split / deluxe album merge
+
+    /// Finds albums split across folders with complementary track numbers
+    /// (standard disc missing bonus tracks that live in a Deluxe folder, etc.)
+    /// and proposes a single destination folder + canonical album name.
+    private func detectSplitAlbums(in files: [AudioFile], root: URL) -> [AudioFile] {
+        // Bucket by artist + normalized base album name.
+        var buckets: [String: [Int]] = [:] // key → file indices
+        for (index, file) in files.enumerated() {
+            guard let track = file.tags.trackNumber else { continue }
+            _ = track
+            let artist = normalizedPerson(
+                settings.preferAlbumArtist
+                    ? (file.tags.albumArtist ?? file.tags.artist)
+                    : (file.tags.artist ?? file.tags.albumArtist)
+            )
+            let album = file.tags.album?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let folderAlbum = file.url.deletingLastPathComponent().lastPathComponent
+            let base = albumBaseName(album.isEmpty ? folderAlbum : album)
+            guard !artist.isEmpty, !base.isEmpty else { continue }
+            let key = artist + "\u{1f}" + base
+            buckets[key, default: []].append(index)
+        }
+
+        var result = files
+
+        for (_, indices) in buckets {
+            guard indices.count >= 2 else { continue }
+
+            // Group those files by containing folder.
+            var byFolder: [String: [Int]] = [:]
+            for i in indices {
+                let folder = result[i].url.deletingLastPathComponent().path
+                byFolder[folder, default: []].append(i)
+            }
+            guard byFolder.count >= 2 else { continue }
+
+            let folderEntries: [(path: String, indices: [Int], tracks: Set<Int>)] = byFolder.map { path, idxs in
+                let tracks = Set(idxs.compactMap { result[$0].tags.trackNumber })
+                return (path, idxs, tracks)
+            }
+
+            // Pair complementary folders (low track overlap).
+            var mergeSets: [[(path: String, indices: [Int], tracks: Set<Int>)]] = []
+            var used = Set<String>()
+
+            for i in 0..<folderEntries.count {
+                let a = folderEntries[i]
+                if used.contains(a.path) { continue }
+                var cluster = [a]
+                for j in (i + 1)..<folderEntries.count {
+                    let b = folderEntries[j]
+                    if used.contains(b.path) { continue }
+                    if tracksAreComplementary(a.tracks, b.tracks)
+                        || tracksAreComplementary(
+                            cluster.reduce(into: Set<Int>()) { $0.formUnion($1.tracks) },
+                            b.tracks
+                        ) {
+                        cluster.append(b)
+                    }
+                }
+                if cluster.count >= 2 {
+                    for item in cluster { used.insert(item.path) }
+                    mergeSets.append(cluster)
+                }
+            }
+
+            for cluster in mergeSets {
+                let allIndices = cluster.flatMap(\.indices)
+                let canonicalAlbum = chooseCanonicalAlbumName(
+                    files: allIndices.map { result[$0] }
+                )
+                let artistForPath = (
+                    settings.preferAlbumArtist
+                        ? (result[allIndices[0]].tags.albumArtist ?? result[allIndices[0]].tags.artist)
+                        : (result[allIndices[0]].tags.artist ?? result[allIndices[0]].tags.albumArtist)
+                ) ?? "Unknown Artist"
+
+                let folderComponents = settings.folderPattern.apply(
+                    artist: artistForPath,
+                    album: canonicalAlbum,
+                    year: allIndices.compactMap { result[$0].tags.year }.min()
+                )
+
+                for i in allIndices {
+                    let trackList = cluster.map { folder in
+                        let sorted = folder.tracks.sorted()
+                        let label = URL(fileURLWithPath: folder.path).lastPathComponent
+                        return "\(label): \(sorted.map(String.init).joined(separator: ", "))"
+                    }.joined(separator: " · ")
+
+                    result[i].issues.append(FileIssue(
+                        kind: .splitAlbum,
+                        description: "Album split across folders with complementary tracks — merge as “\(canonicalAlbum)” (\(trackList))",
+                        severity: .warning,
+                        autoFix: true,
+                        proposedFix: canonicalAlbum
+                    ))
+
+                    // Rebuild destination under the canonical album name.
+                    let rawName = settings.filenamePattern.apply(
+                        track: result[i].tags.trackNumber,
+                        artist: result[i].tags.artist ?? result[i].tags.albumArtist,
+                        title: result[i].tags.title
+                    )
+                    let safeName = sanitizeFilename(rawName)
+                    let ext = result[i].url.pathExtension.lowercased()
+                    var proposed = root
+                    for component in folderComponents {
+                        proposed = proposed.appendingPathComponent(sanitizeFilename(component))
+                    }
+                    proposed = proposed.appendingPathComponent("\(safeName).\(ext)")
+                    result[i].proposedURL = proposed
+                }
+            }
+        }
+
+        return result
+    }
+
+    /// True when two track-number sets mostly fill each other's gaps
+    /// (little overlap — e.g. {1–4,6–9} and {5,10–14}).
+    private func tracksAreComplementary(_ a: Set<Int>, _ b: Set<Int>) -> Bool {
+        guard !a.isEmpty, !b.isEmpty else { return false }
+        let overlap = a.intersection(b).count
+        let smaller = min(a.count, b.count)
+        let unionCount = a.union(b).count
+        // Allow a little accidental overlap, but require real complementary gain.
+        let lowOverlap = Double(overlap) / Double(smaller) <= 0.25
+        let fillsGaps = unionCount >= a.count + b.count - max(overlap, 0)
+        let meaningful = unionCount > max(a.count, b.count)
+        return lowOverlap && fillsGaps && meaningful
+    }
+
+    private func chooseCanonicalAlbumName(files: [AudioFile]) -> String {
+        let names = files.compactMap { file -> String? in
+            let tag = file.tags.album?.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let tag, !tag.isEmpty { return tag }
+            let folder = file.url.deletingLastPathComponent().lastPathComponent
+            return folder.isEmpty ? nil : folder
+        }
+        guard !names.isEmpty else { return "Unknown Album" }
+
+        let scored = names.map { name -> (String, Int) in
+            var score = name.count
+            let lower = name.lowercased()
+            if lower.contains("deluxe") { score += 100 }
+            if lower.contains("expanded") { score += 80 }
+            if lower.contains("complete") { score += 70 }
+            if lower.contains("anniversary") { score += 60 }
+            if lower.contains("special edition") { score += 50 }
+            if lower.contains("remaster") { score += 20 }
+            return (name, score)
+        }
+        return scored.max(by: { $0.1 < $1.1 })?.0 ?? names[0]
+    }
+
+    private func albumBaseName(_ name: String) -> String {
+        var s = name.lowercased()
+        let junk: [String] = [
+            "deluxe edition", "deluxe version", "the deluxe edition", "deluxe",
+            "expanded edition", "expanded",
+            "special edition", "bonus edition", "bonus tracks",
+            "complete edition", "anniversary edition",
+            "remastered", "remaster", "explicit",
+        ]
+        for phrase in junk.sorted(by: { $0.count > $1.count }) {
+            for wrap in [" (\(phrase))", " [\(phrase)]", " - \(phrase)", " \(phrase)"] {
+                s = s.replacingOccurrences(of: wrap, with: "")
+            }
+            if s.hasSuffix(phrase) {
+                s = String(s.dropLast(phrase.count))
+            }
+        }
+        // Drop leftover empty parens / brackets and collapse spaces.
+        s = s.replacingOccurrences(of: #"\(\s*\)"#, with: "", options: .regularExpression)
+        s = s.replacingOccurrences(of: #"\[\s*\]"#, with: "", options: .regularExpression)
+        while s.contains("  ") { s = s.replacingOccurrences(of: "  ", with: " ") }
+        return s.trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
+    }
+
+    private func normalizedPerson(_ name: String?) -> String {
+        (name ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
     }
 
     /// Hashes only the first and last 64 KB of a file.

@@ -118,6 +118,7 @@ enum IssueKind: String, CaseIterable {
     case illegalFilenameChars = "Illegal Filename Characters"
     case nonStandardNaming   = "Non-standard Filename"
     case wrongFolder         = "Wrong Folder Location"
+    case splitAlbum          = "Split Album"
     case duplicate           = "Possible Duplicate"
     case extensionMismatch   = "Extension Mismatch"
     case malformedTag        = "Malformed Tag"

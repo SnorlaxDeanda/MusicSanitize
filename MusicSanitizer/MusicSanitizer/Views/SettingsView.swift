@@ -200,6 +200,15 @@ struct DuplicatesSettingsTab: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            Section("Split Albums") {
+                Toggle("Merge split / deluxe album folders", isOn: Binding(
+                    get: { s.mergeSplitAlbums },
+                    set: { s.mergeSplitAlbums = $0 }
+                ))
+                Text("If one folder has tracks 1–4, 6–9 and another Deluxe folder has 5, 10–14 for the same album, Combine them into one folder and prefer the Deluxe album name.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
     }
