@@ -21,20 +21,48 @@ actor FixService {
         progressHandler: @Sendable @escaping (Double, String) -> Void
     ) async throws -> FixReport {
 
-        // 1. Create backup if enabled
+        let selected = files.filter(\.isSelected)
+        progressHandler(0.01, "Preparing…")
+
+        // Fail fast with a clear error instead of hanging on a bad backup config.
+        if settings.backupEnabled {
+            switch settings.backupMode {
+            case .insideSourceFolder:
+                if settings.backupFolderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    throw BackupError.invalidFolderName
+                }
+            case .customFolder:
+                if settings.backupCustomURL == nil {
+                    throw BackupError.customFolderNotChosen
+                }
+            }
+        }
+
+        // Resolve ffmpeg up front so the first real write doesn't stall on path lookup.
+        progressHandler(0.02, "Locating ffmpeg…")
+        _ = try TagService.ffmpegPath()
+
+        // 1. Create backup if enabled (with live progress — this used to run
+        // silently and left the UI stuck on "Starting…").
         let backupRoot: URL?
         if settings.backupEnabled {
-            backupRoot = try createBackup(files: files, root: root)
-            progressHandler(0.05, "Backup created")
+            backupRoot = try createBackup(files: selected, root: root) { done, total, name in
+                let fraction = total == 0 ? 0.08 : 0.02 + 0.08 * (Double(done) / Double(total))
+                progressHandler(fraction, "Backing up \(done)/\(total): \(name)")
+            }
+            progressHandler(0.10, "Backup created")
         } else {
             backupRoot = nil
         }
 
         var report = FixReport()
-        let total = Double(files.count)
+        let total = Double(max(selected.count, 1))
 
-        for (i, file) in files.enumerated() where file.isSelected {
-            progressHandler(Double(i) / total, file.filename)
+        for (i, file) in selected.enumerated() {
+            // Reserve 0.10–1.0 for per-file work when backup ran; 0–1.0 otherwise.
+            let base = settings.backupEnabled ? 0.10 : 0.0
+            let span = 1.0 - base
+            progressHandler(base + span * (Double(i) / total), file.filename)
             let result = await fixFile(file, root: root)
             report.results.append(result)
         }
@@ -55,6 +83,16 @@ actor FixService {
            let canonical = merge.proposedFix?.trimmingCharacters(in: .whitespacesAndNewlines),
            !canonical.isEmpty {
             tags.album = canonical
+        }
+
+        // Infer a title from the filename when the tag is empty so MusicBrainz
+        // (and the written title) have something to work with.
+        if settings.fixMissingTitles,
+           tags.title?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true {
+            let leaf = file.url.deletingPathExtension().lastPathComponent
+            if let inferred = ScanService.inferredTitle(fromFilename: leaf) {
+                tags.title = inferred
+            }
         }
 
         // MusicBrainz lookup if needed
@@ -122,12 +160,18 @@ actor FixService {
 
     // MARK: - Backup
 
-    private func createBackup(files: [AudioFile], root: URL) throws -> URL {
+    private func createBackup(
+        files: [AudioFile],
+        root: URL,
+        progress: ((Int, Int, String) -> Void)? = nil
+    ) throws -> URL {
         let fm = FileManager.default
         let backupRoot = try resolveBackupRoot(sourceRoot: root)
         try fm.createDirectory(at: backupRoot, withIntermediateDirectories: true)
 
-        for file in files where file.isSelected {
+        let total = files.count
+        for (index, file) in files.enumerated() {
+            progress?(index, total, file.filename)
             guard let relative = relativePath(of: file.url, under: root) else {
                 throw BackupError.fileOutsideRoot(file.url)
             }
@@ -137,6 +181,7 @@ actor FixService {
                 try fm.copyItem(at: file.url, to: dest)
             }
         }
+        progress?(total, total, "Done")
         return backupRoot
     }
 
