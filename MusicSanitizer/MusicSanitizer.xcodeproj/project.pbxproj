@@ -24,6 +24,7 @@
 		452872A74D8920FA0BC434B6 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9CD8F648BE4BF53B906163F; };
 		FF7EE6520F47B647C04586F9 /* ReportSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E605F058CC309600B697212; };
 		A1B2C3D4E5F60718293A4B5C /* DuplicateReviewSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4E5F60718293A4B5C6D7E8F; };
+		B2C3D4E5F60718293A4B5C6D /* ToolPathCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5F60718293A4B5C6D7E8F90; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -44,6 +45,7 @@
 		B9CD8F648BE4BF53B906163F /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		6E605F058CC309600B697212 /* ReportSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportSheet.swift; sourceTree = "<group>"; };
 		D4E5F60718293A4B5C6D7E8F /* DuplicateReviewSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DuplicateReviewSheet.swift; sourceTree = "<group>"; };
+		E5F60718293A4B5C6D7E8F90 /* ToolPathCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolPathCache.swift; sourceTree = "<group>"; };
 		6F7AC2C5D7574E3A6DE778A2 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		68FE6B60469E89A2B8FA6677 /* MusicSanitizer.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = MusicSanitizer.entitlements; sourceTree = "<group>"; };
 		4EC0923FF84651D50A3F91B0 /* MusicSanitizer.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MusicSanitizer.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -85,6 +87,7 @@
 			isa = PBXGroup;
 			children = (
 				08B6496A1EE498BDB51ACAAD /* TagService.swift */,
+				E5F60718293A4B5C6D7E8F90 /* ToolPathCache.swift */,
 				FD3911D558929B7780B63988 /* ScanService.swift */,
 				58E23248AE08E43CF4E2597F /* MusicBrainzService.swift */,
 				63C7ED4D6598F9D46A16572D /* FixService.swift */,
@@ -185,6 +188,7 @@
 				A0B3AA8885AC7E32FB416035 /* AudioFile.swift in Sources */,
 				1062B734BAFEDB64705385DB /* ScanSettings.swift in Sources */,
 				0CDD70B0C5C78AC3030EEE8C /* TagService.swift in Sources */,
+				B2C3D4E5F60718293A4B5C6D /* ToolPathCache.swift in Sources */,
 				D479000923077A865D4070A2 /* ScanService.swift in Sources */,
 				7B2EFE983350098921ABB942 /* MusicBrainzService.swift in Sources */,
 				521DEAC9DB0EDDE6AF32D436 /* FixService.swift in Sources */,

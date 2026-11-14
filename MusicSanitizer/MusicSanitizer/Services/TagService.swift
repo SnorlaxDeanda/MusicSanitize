@@ -407,12 +407,13 @@ actor TagService {
 
     private func stringValue(from items: [AVMetadataItem], key: AVMetadataKey) async -> String? {
         guard let item = items.first(where: { $0.commonKey == key }) else { return nil }
-        return cleaned(try? await item.load(.stringValue))
+        // Prefer async load — AVMetadataItem.stringValue is deprecated on macOS 13+.
+        return cleaned(await loadMetadataString(from: item))
     }
 
     private func stringValue(from items: [AVMetadataItem], identifier: AVMetadataIdentifier) async -> String? {
         guard let item = items.first(where: { $0.identifier == identifier }) else { return nil }
-        return cleaned(try? await item.load(.stringValue))
+        return cleaned(await loadMetadataString(from: item))
     }
 
     private func stringValue(from items: [AVMetadataItem], id3Key: String) async -> String? {
@@ -422,7 +423,11 @@ actor TagService {
             }
         }
         guard let item = items.first(where: { ($0.key as? String) == id3Key }) else { return nil }
-        return cleaned(try? await item.load(.stringValue))
+        return cleaned(await loadMetadataString(from: item))
+    }
+
+    private func loadMetadataString(from item: AVMetadataItem) async -> String? {
+        (try? await item.load(.stringValue))
     }
 
     private func cleaned(_ value: String?) -> String? {
@@ -463,39 +468,7 @@ actor TagService {
     }
 }
 
-// MARK: - Tool path cache / status
-
-private enum ToolPathCache {
-    private static let lock = NSLock()
-    private static var _ffmpeg: String?
-    private static var _ffprobe: String?
-
-    static var ffmpeg: String? {
-        get {
-            lock.lock()
-            defer { lock.unlock() }
-            return _ffmpeg
-        }
-        set {
-            lock.lock()
-            defer { lock.unlock() }
-            _ffmpeg = newValue
-        }
-    }
-
-    static var ffprobe: String? {
-        get {
-            lock.lock()
-            defer { lock.unlock() }
-            return _ffprobe
-        }
-        set {
-            lock.lock()
-            defer { lock.unlock() }
-            _ffprobe = newValue
-        }
-    }
-}
+// MARK: - Tool status
 
 enum FFmpegStatus: Equatable {
     case found(String)
