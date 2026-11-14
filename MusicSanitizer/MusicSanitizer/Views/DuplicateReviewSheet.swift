@@ -1,11 +1,15 @@
 import SwiftUI
 
-/// Review duplicate groups, pick a keeper per group, and move extras to Trash.
+/// Review duplicate groups in pages of ~100, pick a keeper per group, and
+/// move extras on the current page to Trash.
 struct DuplicateReviewSheet: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.dismiss) private var dismiss
 
+    private static let pageSize = 100
+
     @State private var selections: [UUID: UUID] = [:] // groupID → keepID
+    @State private var pageIndex = 0
     @State private var confirmDelete = false
     @State private var isDeleting = false
     @State private var lastResult: String?
@@ -14,8 +18,31 @@ struct DuplicateReviewSheet: View {
         appState.duplicateGroups
     }
 
-    private var deleteCount: Int {
-        groups.reduce(0) { partial, group in
+    private var pageCount: Int {
+        max(1, Int(ceil(Double(groups.count) / Double(Self.pageSize))))
+    }
+
+    private var safePageIndex: Int {
+        min(max(0, pageIndex), pageCount - 1)
+    }
+
+    private var pageGroups: [DuplicateGroup] {
+        guard !groups.isEmpty else { return [] }
+        let start = safePageIndex * Self.pageSize
+        let end = min(start + Self.pageSize, groups.count)
+        return Array(groups[start..<end])
+    }
+
+    private var pageRangeLabel: String {
+        guard !groups.isEmpty else { return "0 groups" }
+        let start = safePageIndex * Self.pageSize + 1
+        let end = min((safePageIndex + 1) * Self.pageSize, groups.count)
+        return "Groups \(start)–\(end) of \(groups.count)"
+    }
+
+    /// Trash count for the *current page only* — keeps large libraries manageable.
+    private var pageDeleteCount: Int {
+        pageGroups.reduce(0) { partial, group in
             let keep = selections[group.id] ?? group.suggestedKeepID
             return partial + group.files.filter { $0.id != keep }.count
         }
@@ -29,9 +56,14 @@ struct DuplicateReviewSheet: View {
             if groups.isEmpty {
                 emptyState
             } else {
+                if pageCount > 1 {
+                    pageBar
+                    Divider()
+                }
+
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 16) {
-                        ForEach(groups) { group in
+                        ForEach(pageGroups) { group in
                             DuplicateGroupCard(
                                 group: group,
                                 keepID: Binding(
@@ -42,24 +74,32 @@ struct DuplicateReviewSheet: View {
                         }
                     }
                     .padding()
+                    .id(safePageIndex) // reset scroll position when flipping pages
                 }
             }
 
             Divider()
             footer
         }
-        .onAppear { seedSelections() }
+        .onAppear {
+            seedSelections(for: pageGroups)
+            clampPage()
+        }
+        .onChange(of: groups.count) { _ in
+            clampPage()
+            seedSelections(for: pageGroups)
+        }
         .confirmationDialog(
-            "Move \(deleteCount) duplicate file\(deleteCount == 1 ? "" : "s") to Trash?",
+            "Move \(pageDeleteCount) duplicate file\(pageDeleteCount == 1 ? "" : "s") on this page to Trash?",
             isPresented: $confirmDelete,
             titleVisibility: .visible
         ) {
-            Button("Move to Trash", role: .destructive) {
+            Button("Move This Page to Trash", role: .destructive) {
                 Task { await performDelete() }
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("One file is kept in each group. You can restore from Trash if needed.")
+            Text("Only the \(pageGroups.count) group\(pageGroups.count == 1 ? "" : "s") on this page are affected. Other pages are left alone. You can restore from Trash if needed.")
         }
     }
 
@@ -68,7 +108,7 @@ struct DuplicateReviewSheet: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Review Duplicates")
                     .font(.title2).bold()
-                Text("\(groups.count) group\(groups.count == 1 ? "" : "s") · \(deleteCount) file\(deleteCount == 1 ? "" : "s") marked for Trash")
+                Text("\(pageRangeLabel) · \(pageDeleteCount) on this page marked for Trash")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
@@ -78,6 +118,38 @@ struct DuplicateReviewSheet: View {
                 .disabled(isDeleting)
         }
         .padding()
+        .background(.bar)
+    }
+
+    private var pageBar: some View {
+        HStack(spacing: 12) {
+            Button {
+                goToPage(safePageIndex - 1)
+            } label: {
+                Label("Previous", systemImage: "chevron.left")
+            }
+            .disabled(isDeleting || safePageIndex == 0)
+
+            Spacer()
+
+            Text("Page \(safePageIndex + 1) of \(pageCount)")
+                .font(.callout.weight(.medium))
+                .monospacedDigit()
+
+            Spacer()
+
+            Button {
+                goToPage(safePageIndex + 1)
+            } label: {
+                Label("Next", systemImage: "chevron.right")
+            }
+            .disabled(isDeleting || safePageIndex >= pageCount - 1)
+            .labelStyle(.titleAndIcon)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .padding(.horizontal)
+        .padding(.vertical, 8)
         .background(.bar)
     }
 
@@ -102,33 +174,52 @@ struct DuplicateReviewSheet: View {
                 Text(lastResult)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            } else if pageCount > 1 {
+                Text("Reviewing \(Self.pageSize) groups at a time. Trash only affects this page.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             } else {
                 Text("Keeps the best copy in each group (format, tags, size). Others go to Trash.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            Button("Reset Suggestions") {
-                seedSelections()
+            Button("Reset Page") {
+                seedSelections(for: pageGroups)
             }
-            .disabled(isDeleting || groups.isEmpty)
+            .disabled(isDeleting || pageGroups.isEmpty)
 
-            Button(isDeleting ? "Moving…" : "Move Duplicates to Trash") {
+            Button(isDeleting ? "Moving…" : "Move This Page to Trash") {
                 confirmDelete = true
             }
             .buttonStyle(.borderedProminent)
             .tint(.red)
-            .disabled(isDeleting || deleteCount == 0)
+            .disabled(isDeleting || pageDeleteCount == 0)
             .keyboardShortcut(.return)
         }
         .padding()
         .background(.bar)
     }
 
-    private func seedSelections() {
-        var next: [UUID: UUID] = [:]
-        for group in groups {
-            next[group.id] = group.suggestedKeepID
+    private func goToPage(_ index: Int) {
+        guard !isDeleting else { return }
+        pageIndex = min(max(0, index), pageCount - 1)
+        seedSelections(for: pageGroups)
+        lastResult = nil
+    }
+
+    private func clampPage() {
+        pageIndex = min(max(0, pageIndex), max(0, pageCount - 1))
+    }
+
+    private func seedSelections(for page: [DuplicateGroup]) {
+        var next = selections
+        for group in page {
+            if next[group.id] == nil {
+                next[group.id] = group.suggestedKeepID
+            } else if !group.files.contains(where: { $0.id == next[group.id] }) {
+                next[group.id] = group.suggestedKeepID
+            }
         }
         selections = next
         lastResult = nil
@@ -139,23 +230,26 @@ struct DuplicateReviewSheet: View {
         lastResult = nil
         defer { isDeleting = false }
 
+        let page = pageGroups
         var ids: [UUID] = []
-        for group in groups {
+        for group in page {
             let keep = selections[group.id] ?? group.suggestedKeepID
             ids.append(contentsOf: group.files.filter { $0.id != keep }.map(\.id))
         }
 
         let result = await appState.deleteDuplicateFiles(ids: ids)
         if result.failed.isEmpty {
-            lastResult = "Moved \(result.deleted) file\(result.deleted == 1 ? "" : "s") to Trash."
+            lastResult = "Moved \(result.deleted) file\(result.deleted == 1 ? "" : "s") to Trash from this page."
             if appState.duplicateGroups.isEmpty {
                 dismiss()
             } else {
-                seedSelections()
+                clampPage()
+                seedSelections(for: pageGroups)
             }
         } else {
             lastResult = "Moved \(result.deleted); \(result.failed.count) failed."
-            seedSelections()
+            clampPage()
+            seedSelections(for: pageGroups)
         }
     }
 }

@@ -196,7 +196,7 @@ struct DuplicatesSettingsTab: View {
                 }
             }
             Section("Removing Duplicates") {
-                Text("After a scan, use Review Duplicates in the toolbar (or Sidebar → Duplicates). Pick the copy to keep in each group; extras are moved to Trash, not permanently deleted.")
+                Text("After a scan, use Review Duplicates in the toolbar (or Sidebar → Duplicates). Groups are shown 100 at a time; Trash only affects the current page. Pick the copy to keep in each group; extras go to Trash, not permanent delete.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

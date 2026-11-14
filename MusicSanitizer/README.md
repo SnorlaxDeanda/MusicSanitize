@@ -20,6 +20,7 @@ standardising filenames, and organising folder structure.
 ### Duplicate Detection & Removal
 - Three methods: file hash, hash + duration, or duration + file size
 - **Review Duplicates** toolbar action (also in the sidebar) groups matches
+- Review in pages of **100 groups**; Trash only affects the current page
 - Pick one keeper per group; extras are moved to **Trash** (recoverable)
 - Suggested keeper prefers lossless formats, richer tags, and larger files
 
