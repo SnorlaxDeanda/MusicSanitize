@@ -53,6 +53,12 @@ class ScanSettings: ObservableObject {
     @Published var detectDuplicates: Bool = true
     @Published var duplicateMethod: DuplicateMethod = .hashAndDuration
 
+    // Split / deluxe album merge
+    /// When an album is split across folders with complementary track numbers
+    /// (e.g. standard 1–4,6–9 + deluxe 5,10–14), propose combining them into
+    /// one folder and normalizing the album name (preferring Deluxe when present).
+    @Published var mergeSplitAlbums: Bool = true
+
     // Formats to process
     @Published var processMP3: Bool  = true
     @Published var processFLAC: Bool = true

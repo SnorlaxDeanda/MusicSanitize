@@ -20,8 +20,16 @@ standardising filenames, and organising folder structure.
 ### Duplicate Detection & Removal
 - Three methods: file hash, hash + duration, or duration + file size
 - **Review Duplicates** toolbar action (also in the sidebar) groups matches
+- Review in pages of **100 groups**; Trash only affects the current page
 - Pick one keeper per group; extras are moved to **Trash** (recoverable)
 - Suggested keeper prefers lossless formats, richer tags, and larger files
+
+### Split / Deluxe Album Merge
+- Detects the same album split across folders with complementary track numbers
+  (e.g. standard `1–4, 6–9` + deluxe `5, 10–14`)
+- Proposes combining them into one folder
+- Prefers a Deluxe / Expanded / Complete album title when present
+- Toggle in Settings → Duplicates → Split Albums
 
 ### Safety
 - **Backup before modify** — originals are copied to `_MusicSanitizer_Backup/` inside the music folder, or to a custom folder you choose in Settings (time-stamped subfolder per run)

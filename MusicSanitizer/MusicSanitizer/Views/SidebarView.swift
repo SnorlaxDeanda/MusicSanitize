@@ -106,6 +106,7 @@ struct SidebarView: View {
         case .oversizedArtwork: return "photo.badge.exclamationmark"
         case .illegalFilenameChars, .nonStandardNaming: return "textformat"
         case .wrongFolder:      return "folder.badge.questionmark"
+        case .splitAlbum:       return "rectangle.stack.badge.plus"
         case .duplicate:        return "doc.on.doc"
         case .extensionMismatch: return "exclamationmark.triangle"
         case .malformedTag:     return "tag.slash"
@@ -115,7 +116,7 @@ struct SidebarView: View {
     func issueColor(_ kind: IssueKind) -> Color {
         switch kind {
         case .illegalFilenameChars, .extensionMismatch, .malformedTag: return .red
-        case .duplicate, .oversizedArtwork: return .orange
+        case .duplicate, .oversizedArtwork, .splitAlbum: return .orange
         default: return .yellow
         }
     }

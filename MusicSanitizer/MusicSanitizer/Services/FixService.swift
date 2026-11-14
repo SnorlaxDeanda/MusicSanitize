@@ -50,14 +50,28 @@ actor FixService {
         var result = FileFixResult(file: file)
         var tags = file.tags
 
+        // Split-album merge: adopt the canonical (often Deluxe) album name.
+        if let merge = file.issues.first(where: { $0.kind == .splitAlbum }),
+           let canonical = merge.proposedFix?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !canonical.isEmpty {
+            tags.album = canonical
+        }
+
         // MusicBrainz lookup if needed
         if settings.lookupMetadata {
             let needsLookup = file.issues.contains { [.missingTitle, .missingArtist, .missingAlbum, .missingYear].contains($0.kind) }
             if needsLookup {
-                if let fetched = await mbService.lookup(title: tags.title, artist: tags.artist, album: tags.album) {
+                // Prefer looking up under the canonical album when merging splits.
+                let lookupAlbum = tags.album
+                if let fetched = await mbService.lookup(title: tags.title, artist: tags.artist, album: lookupAlbum) {
                     if tags.title  == nil || tags.title!.isEmpty  { tags.title  = fetched.title }
                     if tags.artist == nil || tags.artist!.isEmpty { tags.artist = fetched.artist }
-                    if tags.album  == nil || tags.album!.isEmpty  { tags.album  = fetched.album }
+                    // Don't overwrite a deliberate split-album canonical name with a shorter MB title.
+                    if file.issues.contains(where: { $0.kind == .splitAlbum }) {
+                        if tags.album == nil || tags.album!.isEmpty { tags.album = fetched.album }
+                    } else if tags.album == nil || tags.album!.isEmpty {
+                        tags.album = fetched.album
+                    }
                     if tags.year   == nil                          { tags.year   = fetched.year }
                     if tags.trackNumber == nil                     { tags.trackNumber = fetched.trackNumber }
                     if tags.albumArtist == nil                     { tags.albumArtist = fetched.albumArtist }
